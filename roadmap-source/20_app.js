@@ -4271,7 +4271,7 @@ arm-none-eabi-objcopy -O binary \
 
   function prDefaults() {
     return {
-      running: true, simMs: 0, stage: 1,
+      running: true, simMs: 0, stage: 1, speed: 1,
       sig:   { drive: "push", out: 1, pull: "none" },
       wire:  { aOut: 1, bOut: 0 },
       uart:  { data: 8, parity: "none", stop: 1, baud: 9600, clk: 8000000, char: 0x48, drift: 0, tx: null, queue: [], sent: 0, errSeen: false, last: null },
@@ -4302,6 +4302,7 @@ arm-none-eabi-objcopy -O binary \
     if (!Array.isArray(s.log)) { s.log = []; }
     if (!s.goals || typeof s.goals !== "object") { s.goals = {}; }
     if (typeof s.stage !== "number" || s.stage < 1 || s.stage > 9 || !prStageById(s.stage)) { s.stage = 1; }
+    if (s.speed !== 0.5 && s.speed !== 0.25) { s.speed = 1; }
     if (!s.seen || typeof s.seen !== "object") { s.seen = {}; }
     for (var k in d) { if (!(k in s)) { s[k] = d[k]; } }
     protos = s;
@@ -4412,11 +4413,11 @@ arm-none-eabi-objcopy -O binary \
     return '<div class="pr-la">' + svg + '</div>';
   }
   function prLaCfg() {
-    var u = protos.uart, st = protos.stage;
+    var u = protos.uart, st = protos.stage, a = prUartLive();
     if (st === 1) { return { bits: [{ v: 1, k: 'stop', l: 'idle' }], playIdx: null, showSamples: false }; }
-    if (st === 3) { return { bits: prUartBits(u, u.char), playIdx: null, showSamples: true, drift: u.drift }; }
-    var bits = u.tx ? u.tx.bits : prUartBits(u, u.char);
-    return { bits: bits, playIdx: u.tx ? u.tx.idx : 0, showSamples: false };
+    if (st === 3 && !(a && a.review)) { return { bits: prUartBits(u, u.char), playIdx: null, showSamples: true, drift: u.drift }; }
+    var bits = a ? a.tx.bits : (u.tx ? u.tx.bits : prUartBits(u, u.char));
+    return { bits: bits, playIdx: a ? Math.min(Math.floor(a.pos), bits.length) : 0, showSamples: st === 3, drift: u.drift };
   }
   function prUpdateLA() { var h = document.getElementById('pr-la-host'); if (h) { h.innerHTML = prLA(prLaCfg()); } }
 
@@ -4543,10 +4544,13 @@ arm-none-eabi-objcopy -O binary \
       '<div class="pr-read" id="pr-frame-read">' + prFrameReadHtml() + '</div></section>';
   }
   function prFrameReadHtml() {
-    var u = protos.uart;
-    if (u.tx) { var b = u.tx.bits[Math.min(u.tx.idx, u.tx.bits.length - 1)]; return 'sending… bit <b>' + Math.min(u.tx.idx + 1, u.tx.bits.length) + '/' + u.tx.bits.length + '</b> · line now <b>' + (b && b.v ? 'high' : 'low') + '</b>'; }
-    if (u.last != null) { return 'sent <b>' + esc(prHex(u.char)) + '</b> (' + esc(prCharLabel(u.char)) + ') · received <b class="good">' + esc(prHex(u.last)) + '</b> (' + esc(prCharLabel(u.last)) + ') ✓'; }
-    return 'idle · high. Press <b>Send byte</b> to walk the frame.';
+    var u = protos.uart, a = prUartLive();
+    if (a) {
+      var b = a.tx.bits[Math.min(Math.floor(a.pos), a.tx.bits.length - 1)];
+      return prReviewTag(a) + (a.review ? 'reviewing\u2026 ' : 'sending\u2026 ') + 'bit <b>' + (Math.min(Math.floor(a.pos) + 1, a.tx.bits.length)) + '/' + a.tx.bits.length + '</b> \u00b7 line now <b>' + (b && b.v ? 'high' : 'low') + '</b>';
+    }
+    if (u.last != null) { return 'sent <b>' + esc(prHex(u.char)) + '</b> (' + esc(prCharLabel(u.char)) + ') \u00b7 received <b class="good">' + esc(prHex(u.last)) + '</b> (' + esc(prCharLabel(u.last)) + ') \u2713'; }
+    return 'idle \u00b7 high. Press <b>Send byte</b> to walk the frame.';
   }
   function prUartCode() {
     var u = protos.uart, brr = Math.round(u.clk / u.baud), L = [];
@@ -4572,11 +4576,13 @@ arm-none-eabi-objcopy -O binary \
       '<p class="pf-hint">The receiver has no clock wire — it <b>counts</b>. After the start edge it waits half a bit, then samples at each bit centre. A wrong baud makes every sample land a little off, and the error <b>accumulates</b>: the far bits cross a boundary first and get the wrong voltage. Slide until a dot goes red.</p></section>';
   }
   function prSampleShowCard() {
-    var u = protos.uart, ch = u.tx ? u.tx.ch : u.char;
-    var bits = u.tx ? u.tx.bits : prUartBits(u, ch), dec = prDecode(bits, u, u.drift);
+    var u = protos.uart, a = prUartLive(), ch = u.char, bits, drift;
+    if (a) { ch = a.tx.ch; bits = a.tx.bits; drift = a.tx.drift; }
+    else { bits = u.tx ? u.tx.bits : prUartBits(u, ch); drift = u.drift; }
+    var dec = prDecode(bits, u, drift);
     return '<section class="pf-card"><h3>Sampling points<span class="pf-sub">dots = where the receiver reads each bit</span></h3>' +
-      '<div id="pr-la-host">' + prLA({ bits: bits, playIdx: u.tx ? u.tx.idx : null, showSamples: true, drift: u.drift }) + '</div>' +
-      '<div class="pr-read">sent <b>' + esc(prHex(ch)) + "</b> → received <b class=\"" + (dec.ok ? 'good' : 'bad') + '">' + esc(prHex(dec.ch)) + '</b> (' + esc(prCharLabel(dec.ch)) + ') · mis-sampled bits <b class="' + (dec.mis ? 'bad' : 'good') + '">' + dec.mis + '</b>' + (dec.ok ? ' · <span class="good">✓ clean</span>' : ' · <span class="bad">✗ corrupted</span>') + '</div></section>';
+      '<div id="pr-la-host">' + prLA({ bits: bits, playIdx: a ? Math.min(Math.floor(a.pos), bits.length) : (u.tx ? u.tx.idx : null), showSamples: true, drift: drift }) + '</div>' +
+      '<div class="pr-read">' + prReviewTag(a) + 'sent <b>' + esc(prHex(ch)) + "</b> \u2192 received <b class=\"" + (dec.ok ? 'good' : 'bad') + '">' + esc(prHex(dec.ch)) + '</b> (' + esc(prCharLabel(dec.ch)) + ') \u00b7 mis-sampled bits <b class="' + (dec.mis ? 'bad' : 'good') + '">' + dec.mis + '</b>' + (dec.ok ? ' \u00b7 <span class="good">\u2713 clean</span>' : ' \u00b7 <span class="bad">\u2717 corrupted</span>') + '</div></section>';
   }
 
   /* ---- stage 4: terminal ---- */
@@ -4689,10 +4695,10 @@ arm-none-eabi-objcopy -O binary \
       grid + boxes + play + '</svg></div>';
   }
 
-  function prI2cLive() { return _prAnim && _prAnim.kind === 'i2c' ? _prAnim : null; }
+  function prI2cLive() { return prViewOf('i2c'); }
   function prI2cBanner(slots, res) {
     var a = prI2cLive(), i;
-    if (a) { return 't = <b>' + Math.min(Math.floor(a.pos), slots.length) + '/' + slots.length + '</b> clocks \u00b7 watch the table fill as the line resolves'; }
+    if (a) { return prReviewTag(a) + 't = <b>' + Math.min(Math.floor(a.pos), slots.length) + '/' + slots.length + '</b> clocks \u00b7 ' + (a.review ? 'the line had resolved this far when the transfer reached here' : 'watch the table fill as the line resolves'); }
     if (res == null) { return 'idle \u2014 the pull-ups hold both lines high. Press send.'; }
     if (res.lostAt != null) {
       var txt = 'Arbitration over at <b>A' + (6 - res.lostAt) + '</b>: ' + (res.loser === 'M1' ? 'M1' : 'M2') + ' wanted 1, read 0 back \u2014 it drops out. <b>' + (res.loser === 'M1' ? 'M2' : 'M1') + ' owns the bus</b> and the slave ACKs.';
@@ -4728,18 +4734,18 @@ arm-none-eabi-objcopy -O binary \
       '<p class="pf-hint">The line is high only while <b>both</b> let go. This exact wiring is what the animation above resolves one clock at a time \u2014 and it is why a losing master can drop out at any bit without damaging the winner\u2019s byte.</p></section>';
   }
   function prI2cWaveCard() {
-    var u = protos.i2c;
+    var u = protos.i2c, a = prI2cLive();
     var res = u.result && u.result.kind === 'masters' ? u.result : null;
-    var slots = res ? res.slots : prI2cMasters(u.m1val, u.m2val).slots;
+    var slots = a ? a.tx.slots : res ? res.slots : prI2cMasters(u.m1val, u.m2val).slots;
     return '<section class="pf-card"><h3>Logic analyser<span class="pf-sub">SCL + SDA, decode band under every clock</span></h3>' +
-      prIAL2(slots, { playIdx: res ? null : 0, playId: 'pr-i2c-play' }) +
+      prIAL2(slots, { playIdx: a ? Math.min(Math.floor(a.pos), slots.length) : (res ? null : 0), playId: 'pr-i2c-play' }) +
       '<div class="pr-read" id="pr-i2c-read">' + prI2cBanner(slots, res) + '</div></section>';
   }
   function prI2cTableCard() {
-    var u = protos.i2c;
+    var u = protos.i2c, a = prI2cLive();
     var res = u.result && u.result.kind === 'masters' ? u.result : null;
-    var slots = res ? res.slots : prI2cMasters(u.m1val, u.m2val).slots;
-    var a = prI2cLive(), upto = a ? Math.min(Math.floor(a.pos), slots.length) : slots.length;
+    var slots = a ? a.tx.slots : res ? res.slots : prI2cMasters(u.m1val, u.m2val).slots;
+    var upto = a ? Math.min(Math.floor(a.pos), slots.length) : slots.length;
     var rows = '', i;
     for (i = 1; i <= 8; i++) {
       var s = slots[i], settled = i < upto || (i === upto && !a);
@@ -4773,17 +4779,17 @@ arm-none-eabi-objcopy -O binary \
       '<p class="pf-hint">Every I\u00b2C transaction opens the same way: START, then a <b>7-bit address + one R/W bit</b> packed into the first byte on the wire \u2014 the byte you see in datasheets as <code>0xA0</code> is really <code>0x50 &lt;&lt; 1 | write</code>. All slaves listen; only the named one answers clock 9 by sinking SDA (<b>ACK</b>). Silence (<b>NACK</b>) means nobody lives there, and the master aborts with a STOP.</p></section>';
   }
   function prI2cAddrWaveCard() {
-    var u = protos.i2c;
+    var u = protos.i2c, a = prI2cLive();
     var res = u.result && u.result.kind !== 'masters' ? u.result : null;
-    var slots = res ? res.slots : prI2cTxSlots(u.addr, u.rw, u.addr === PR_I2C_SLAVE, false);
+    var slots = a ? a.tx.slots : res ? res.slots : prI2cTxSlots(u.addr, u.rw, u.addr === PR_I2C_SLAVE, false);
     return '<section class="pf-card" id="pr-i2c-wavecard">' +
       '<h3>Logic analyser<span class="pf-sub">' + esc(prHex(prAddrByte(u.addr, u.rw))) + ' on the wire = addr ' + esc(prHex(u.addr)) + ' + R/W ' + u.rw + '</span></h3>' +
-      prIAL2(slots, { playIdx: res ? null : 0, playId: 'pr-i2c-play' }) +
+      prIAL2(slots, { playIdx: a ? Math.min(Math.floor(a.pos), slots.length) : (res ? null : 0), playId: 'pr-i2c-play' }) +
       '<div class="pr-read" id="pr-i2c-read">' + prI2cAddrBanner(slots, res) + '</div></section>';
   }
   function prI2cAddrBanner(slots, res) {
     var a = prI2cLive(), i;
-    if (a) { return 't = <b>' + Math.min(Math.floor(a.pos), slots.length) + '/' + slots.length + '</b> clocks \u00b7 all but one listener is already silent'; }
+    if (a) { return prReviewTag(a) + 't = <b>' + Math.min(Math.floor(a.pos), slots.length) + '/' + slots.length + '</b> clocks \u00b7 all but one listener is already silent'; }
     if (res == null) { return 'idle \u2014 SCL and SDA rest high on their pull-ups.'; }
     var ackSlot = -1;
     for (i = 0; i < slots.length; i++) { if (slots[i].kind === 'ack' || slots[i].kind === 'nack') { ackSlot = i; break; } }
@@ -4814,21 +4820,62 @@ arm-none-eabi-objcopy -O binary \
       prGoalCard(6) + prCodeCard('The two levels of the same transaction', PR_I2C_CODE_TWO) + prLogCard());
   }
 
-  /* ---- I2C animation + tick ---- */
+  /* ---- playback: one position, three sources ----
+     _prAnim owns the wire while a transfer travels it; _prCap keeps that same
+     record after it ends so the learner can walk it back bit by bit, and _prPos
+     is where the scrubber parked it. Every renderer asks prView() instead of
+     asking "is it still running?", so review needs no second code path. */
   var _prAnim = null;
-  function prAnimStop() { _prAnim = null; }
+  var _prCap = null;
+  var _prPos = null;
+  var PR_STEP_I2C = 0.55, PR_STEP_SPI = 0.5, PR_STEP_RING = 0.34;
+  /* protos.speed is the multiplier itself, so an old saved state without it just runs at 1x */
+  function prSpeedMul() { return protos.speed === 0.5 || protos.speed === 0.25 ? protos.speed : 1; }
+  function prSpeedLabel() { return protos.speed === 0.25 ? '1/4\u00d7' : protos.speed === 0.5 ? '1/2\u00d7' : '1\u00d7'; }
+  function prSpeedStep() { protos.speed = prSpeedMul() === 1 ? 0.5 : prSpeedMul() === 0.5 ? 0.25 : 1; }
+  function prAnimStop() { _prAnim = null; _prCap = null; _prPos = null; }
+
+  /* a capture goes stale the moment its inputs move out from under it */
+  function prUartSig() { var u = protos.uart; return 'u' + protos.stage + ':' + u.data + u.parity + u.stop + ':' + u.char + ':' + u.drift; }
+  function prI2cSig() { var u = protos.i2c; return 'i' + protos.stage + ':' + (protos.stage === 5 ? u.m1val + ',' + u.m2val : u.addr + ',' + u.rw); }
+  function prSpiSig() { var u = protos.spi; return protos.stage === 9 ? 's9:' + u.byte : 's8:' + u.mMode + ',' + u.sMode + ',' + u.byte; }
+  function prLiveSig(kind) { return kind === 'uart' ? prUartSig() : kind === 'i2c' ? prI2cSig() : prSpiSig(); }
+  function prCap() {
+    if (!_prCap) { return null; }
+    if (_prCap.stage !== protos.stage || _prCap.sig !== prLiveSig(_prCap.kind)) { _prCap = null; _prPos = null; return null; }
+    return _prCap;
+  }
+  function prScrub() {
+    var c = _prPos === null ? null : prCap();
+    if (!c) { return null; }
+    return { kind: c.kind, pos: _prPos, total: c.total, unit: c.unit, step: c.step, tx: c.tx, review: true };
+  }
+  function prView() { return _prAnim || prScrub(); }
+  function prViewOf(kind) { var v = prView(); return v && v.kind === kind ? v : null; }
+  function prUartLive() { return prViewOf('uart'); }
+  function prReviewTag(v) {
+    return v && v.review ? '<span class="pr-revt">\u23ea review</span> ' : '';
+  }
+
+  /* ---- I2C animation + tick ---- */
   function prI2cTick() {
     var st = protos.stage, u = protos.i2c;
     if (!_prAnim || _prAnim.kind !== 'i2c') {
-      if ((st === 5 || st === 6) && u.tx) { _prAnim = { kind: 'i2c', pos: 0, total: u.tx.slots.length, cur: 0, tx: u.tx }; return true; }
+      if ((st === 5 || st === 6) && u.tx) {
+        _prAnim = { kind: 'i2c', pos: 0, total: u.tx.slots.length, cur: 0, unit: 1, step: PR_STEP_I2C, tx: u.tx };
+        _prPos = null;
+        return true;
+      }
       return false;
     }
     if (!protos.running || !u.tx) { _prAnim = null; return false; }
-    _prAnim.pos += 0.55;
+    _prAnim.pos += _prAnim.step * prSpeedMul();
     var k = Math.floor(_prAnim.pos);
     if (k > _prAnim.cur && k <= u.tx.slots.length) { _prAnim.cur = k; }
     if (_prAnim.pos >= _prAnim.total) {
-      var tx = u.tx; u.tx = null; _prAnim = null;
+      var tx = u.tx, anim = _prAnim; u.tx = null; _prAnim = null;
+      _prCap = { kind: 'i2c', stage: st, pos: anim.total, total: tx.slots.length, unit: 1, step: anim.step, tx: tx, sig: prI2cSig() };
+      _prPos = null;
       u.sends++;
       if (tx.kind === 'masters') {
         var lz = null; for (var i = 0; i < tx.slots.length; i++) { if (tx.slots[i].loser) { lz = tx.slots[i].loser; break; } }
@@ -4852,22 +4899,26 @@ arm-none-eabi-objcopy -O binary \
     return true;
   }
 
-  function prSpiLive() { return _prAnim && _prAnim.kind === 'spi' ? _prAnim : null; }
+  function prSpiLive() { return prViewOf('spi'); }
 
   /* ---- SPI animation + tick ---- */
   function prSpiTick() {
     var st = protos.stage, u = protos.spi;
     if (!_prAnim || _prAnim.kind !== 'spi') {
       if ((st === 8 || st === 9) && u.tx) {
-        _prAnim = { kind: 'spi', pos: 0, total: u.tx.kind === 'ring' ? 8 : 16, cur: 0, tx: u.tx };
+        _prAnim = { kind: 'spi', pos: 0, total: u.tx.kind === 'ring' ? 8 : 16, cur: 0,
+                    unit: u.tx.kind === 'ring' ? 2 : 1, step: u.tx.kind === 'ring' ? PR_STEP_RING : PR_STEP_SPI, tx: u.tx };
+        _prPos = null;
         return true;
       }
       return false;
     }
     if (!protos.running || !u.tx) { _prAnim = null; return false; }
-    _prAnim.pos += u.tx.kind === 'ring' ? 0.34 : 0.5;
+    _prAnim.pos += _prAnim.step * prSpeedMul();
     if (_prAnim.pos < _prAnim.total) { return true; }
-    var tx = u.tx; u.tx = null; _prAnim = null;
+    var tx = u.tx, anim = _prAnim; u.tx = null; _prAnim = null;
+    _prCap = { kind: 'spi', stage: st, pos: anim.total, total: anim.total, unit: anim.unit, step: anim.step, tx: tx, sig: prSpiSig() };
+    _prPos = null;
     if (tx.kind === 'modes') {
       var got = prSpiRecv(tx.m, tx.s, prSpiBits(tx.out));
       u.sends++; u.lastGot = got;
@@ -4992,8 +5043,10 @@ arm-none-eabi-objcopy -O binary \
   }
   function prSpiBin(v) { var s = '', b; for (b = 7; b >= 0; b--) { s += ((v >>> b) & 1) ? '1' : '0'; } return s; }
   function prSpiReadHtml() {
-    var u = protos.spi, a = _prAnim && _prAnim.kind === 'spi' && _prAnim.tx && _prAnim.tx.kind === 'modes' ? _prAnim : null;
-    if (a) { return 'clocking \u2014 half-step ' + Math.min(Math.floor(a.pos), 16) + '/16 \u00b7 master mode ' + u.mMode + ', slave mode ' + u.sMode; }
+    var u = protos.spi, a = prSpiLive(), tx = a && a.tx && a.tx.kind === 'modes' ? a.tx : null;
+    if (tx) {
+      return prReviewTag(a) + (a.review ? 'reviewing \u2014 ' : 'clocking \u2014 ') + 'half-step ' + Math.min(Math.floor(a.pos), 16) + '/16 \u00b7 master mode ' + tx.m + ', slave mode ' + tx.s;
+    }
     var r = u.result && u.result.kind === 'modes' ? u.result : null;
     if (!r) { return 'idle \u2014 SCLK sits at ' + (prSpiCpol(u.mMode) ? 'high' : 'low') + '. Nothing moves until the master clocks.'; }
     var verdict;
@@ -5008,9 +5061,10 @@ arm-none-eabi-objcopy -O binary \
       verdict + ' <span class="k">(' + u.okReads + ' matched, ' + u.mismatches + ' mismatched out of ' + u.sends + ')</span>';
   }
   function prSpiWaveCard() {
-    var u = protos.spi, bits = prSpiBits(u.byte);
-    return '<section class="pf-card" id="pr-spi-wavecard"><h3>Logic analyser<span class="pf-sub">SCLK + MOSI, MSB-first, ' + esc(prHex(u.byte)) + '</span></h3>' +
-      prSpiWave(u.mMode, u.sMode, bits, { playOn: false }) +
+    var u = protos.spi, a = prSpiLive(), v = a && a.tx && a.tx.kind === 'modes' ? a.tx : null;
+    var mm = v ? v.m : u.mMode, sm = v ? v.s : u.sMode, sentByte = v ? v.out : u.byte;
+    return '<section class="pf-card" id="pr-spi-wavecard"><h3>Logic analyser<span class="pf-sub">SCLK + MOSI, MSB-first, ' + esc(prHex(sentByte)) + '</span></h3>' +
+      prSpiWave(mm, sm, prSpiBits(sentByte), { playOn: false }) +
       '<div class="pr-read" id="pr-spi-read">' + prSpiReadHtml() + '</div></section>';
   }
   function prSpiStage8() {
@@ -5039,7 +5093,8 @@ arm-none-eabi-objcopy -O binary \
 
   /* ---- stage 9: the shift ring ---- */
   function prSpiRingSrc(u) {
-    if (u.tx) { return { out: u.tx.out, sb: u.tx.slaveBefore }; }
+    var a = prSpiLive(), tx = a && a.tx && a.tx.kind === 'ring' ? a.tx : null;
+    if (tx) { return { out: tx.out, sb: tx.slaveBefore }; }
     if (u.result && u.result.kind === 'ring') { return { out: u.result.out, sb: u.result.got }; }
     return { out: u.byte, sb: u.slaveShift };
   }
@@ -5058,13 +5113,12 @@ arm-none-eabi-objcopy -O binary \
     return '<span class="rn">' + esc(name) + '</span><span class="ff ' + (cls || '') + '">' + cells + '</span>';
   }
   function prSpiRingCard() {
-    var u = protos.spi, a = _prAnim && _prAnim.kind === 'spi' && _prAnim.tx && _prAnim.tx.kind === 'ring' ? _prAnim : null;
-    var k = a ? Math.min(Math.floor(a.pos), 8) : (u.result && u.result.kind === 'ring' ? 8 : 0);
+    var u = protos.spi, a = prSpiLive(), k = a ? Math.min(Math.floor(a.pos), 8) : (u.result && u.result.kind === 'ring' ? 8 : 0);
     var src = prSpiRingSrc(u), st = prSpiRingState(u, k);
     return '<section class="pf-card" id="pr-spi-ring"><h3>One ring, two chips<span class="pf-sub">eight clocks = a complete swap</span></h3>' +
       '<div class="pr-ring">' + prRingRow('master \u2014 sending ' + esc(prHex(src.out)), st.master, 'm') +
         '<span class="arw">\u21c4</span>' + prRingRow('slave \u2014 held ' + esc(prHex(src.sb)) + ' before', st.slave, 's') + '</div>' +
-      '<div class="pr-read">' + (k === 0 ? 'every clock pushes one bit out of each chip and lets one bit in \u2014 neither register ever empties' :
+      '<div class="pr-read">' + (a ? prReviewTag(a) : '') + (k === 0 ? 'every clock pushes one bit out of each chip and lets one bit in \u2014 neither register ever empties' :
         k < 8 ? 'clock ' + k + '/8 \u00b7 ' + esc(prHex(prSpiFromBits(st.master))) + ' so far in the master, ' + esc(prHex(prSpiFromBits(st.slave))) + ' in the slave' :
         'exchange complete \u2014 master now holds <b>' + esc(prHex(prSpiFromBits(st.master))) + '</b>, slave holds the byte you sent' + (u.result && u.result.stale ? ' <span class="bad">(that was the <em>previous</em> measurement)</span>' : ' <span class="good">(this is the current one)</span>')) + '</div>' +
       '<p class="pf-hint">There is no such thing as an SPI <b>read</b>, only an <b>exchange</b>: while your byte travels out on MOSI, the other chip\u2019s byte travels in on MISO. So the value you get answers the question <em>“what was it about to say before I asked?”</em> \u2014 one transaction behind, every time, on every SPI device on earth.</p></section>';
@@ -5312,10 +5366,11 @@ arm-none-eabi-objcopy -O binary \
     }
     var fr = document.getElementById('pr-frame-read'); if (fr) { fr.innerHTML = prFrameReadHtml(); }
     /* I2C playhead + live readouts */
+    var pv = prView();
     if (_prPlay && _prPlay.id === 'pr-i2c-play') {
       var ip = document.getElementById('pr-i2c-play');
       if (ip) {
-        var ia = prI2cLive();
+        var ia = pv && pv.kind === 'i2c' ? pv : null;
         if (ia) {
           var ix = Math.max(0, Math.min(ia.pos, _prPlay.n));
           var ipx = _prPlay.left + ix * _prPlay.cw;
@@ -5328,21 +5383,19 @@ arm-none-eabi-objcopy -O binary \
       var ir = document.getElementById('pr-i2c-read');
       if (ir) {
         var st6 = protos.i2c, rs = st6.result && ((protos.stage === 5) === (st6.result.kind === 'masters')) ? st6.result : null;
-        var sl = rs ? rs.slots : null;
-        if (!sl && _prAnim && _prAnim.tx) { sl = _prAnim.tx.slots; }
-        ir.innerHTML = protos.stage === 5 ? prI2cBanner(sl || prI2cMasters(st6.m1val, st6.m2val).slots, rs) : prI2cAddrBanner(sl || prI2cTxSlots(st6.addr, st6.rw, st6.addr === PR_I2C_SLAVE, false), rs);
+        var sl = ia ? ia.tx.slots : (rs ? rs.slots : null);
+        ir.innerHTML = protos.stage === 5 ? prI2cBanner(sl || prI2cMasters(st6.m1val, st6.m2val).slots, ia ? null : rs) : prI2cAddrBanner(sl || prI2cTxSlots(st6.addr, st6.rw, st6.addr === PR_I2C_SLAVE, false), ia ? null : rs);
       }
       var itb = document.getElementById('pr-i2c-table'); if (itb) { itb.outerHTML = prI2cTableCard(); }
     }
     /* SPI playhead + live readouts */
     if (protos.stage === 8 || protos.stage === 9) {
-      var sa = prSpiLive();
+      var sa = pv && pv.kind === 'spi' ? pv : null;
       if (_prSpiPlay) {
         var sp = document.getElementById(_prSpiPlay.id);
         if (sp) {
           if (sa) {
-            var unit = protos.stage === 9 ? 2 : 1;                 /* ring anim counts clocks, mode anim counts half-steps */
-            var sx = _prSpiPlay.left + Math.max(0, Math.min(sa.pos * unit, 16)) * _prSpiPlay.cw;
+            var sx = _prSpiPlay.left + Math.max(0, Math.min(sa.pos * (sa.unit || 1), 16)) * _prSpiPlay.cw;
             sp.setAttribute('x1', sx.toFixed(1)); sp.setAttribute('x2', sx.toFixed(1));
             sp.setAttribute('opacity', '1');
           } else { sp.setAttribute('opacity', '0'); }
@@ -5356,7 +5409,10 @@ arm-none-eabi-objcopy -O binary \
   }
 
   function prFinishFrame(tx) {
-    var u = protos.uart, dec = prDecode(tx.bits, u, u.drift);
+    var u = protos.uart, dec = prDecode(tx.bits, u, tx.drift);
+    /* freeze the frame that just went out so the scrubber can walk it again */
+    _prCap = { kind: 'uart', stage: protos.stage, pos: tx.bits.length, total: tx.bits.length, unit: 1, step: 1, tx: tx, sig: prUartSig(), dec: dec };
+    _prPos = null;
     u.sent++; u.last = dec.ch; if (!dec.ok) { u.errSeen = true; }
     var sl = prCharLabel(tx.ch), gl = prCharLabel(dec.ch);
     protos.rxLog.unshift({ t: protos.simMs, sent: sl, got: gl, ok: dec.ok });
@@ -5375,11 +5431,13 @@ arm-none-eabi-objcopy -O binary \
       if (!u.tx && u.queue && u.queue.length) {
         var c = u.queue.shift();
         u.char = c;
-        u.tx = { bits: prUartBits(u, c), ch: c, idx: 0 };
+        u.tx = { bits: prUartBits(u, c), ch: c, idx: 0, pos: 0, drift: u.drift };
+        _prPos = null;
         if (protos.stage === 2 || protos.stage === 3) { prRenderStatic(); }
       }
       if (u.tx) {
-        u.tx.idx++;
+        u.tx.pos += prSpeedMul();
+        u.tx.idx = Math.floor(u.tx.pos);
         if (u.tx.idx >= u.tx.bits.length) {
           var tx = u.tx; u.tx = null;
           prFinishFrame(tx);
