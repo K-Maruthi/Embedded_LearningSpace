@@ -1049,6 +1049,44 @@ svg.graph{display:block;width:100%;height:auto;min-height:660px;user-select:none
 .pr-termin{display:flex;gap:8px;margin-top:8px}
 .pr-termin input{flex:1;min-width:0;font-family:var(--mono);font-size:12.5px;padding:7px 9px;border:1px solid var(--rule);background:var(--surface);color:var(--ink)}
 .pr-termin input:focus{outline:none;border-color:var(--accent)}
+/* family tier */
+.pr-fams{display:flex;flex-wrap:wrap;gap:6px;margin:2px 0 0}
+.pr-fam{display:inline-flex;align-items:center;gap:7px;border:1px solid var(--rule);background:var(--surface);color:var(--ink-2);font:600 10.5px var(--mono);text-transform:uppercase;letter-spacing:.06em;padding:6px 12px;cursor:pointer;border-radius:2px;transition:background .1s,color .1s,border-color .1s}
+.pr-fam:hover{border-color:var(--accent);color:var(--ink)}
+.pr-fam.cur{background:var(--ink);color:var(--surface);border-color:var(--ink)}
+.pr-fam .fc{display:inline-flex;gap:3px}
+.pr-fam .fc i{width:5px;height:5px;border-radius:50%;border:1px solid var(--ink-3);display:inline-block}
+.pr-fam.cur .fc i{border-color:var(--surface)}
+.pr-fam .fc i.gd{background:var(--ok);border-color:var(--ok)}
+/* protocol lab tables */
+table.pr-bit{width:100%;border-collapse:collapse;font:10.5px var(--mono);margin:6px 0}
+table.pr-bit th,table.pr-bit td{padding:6px 8px;border-bottom:1px solid var(--rule-soft);text-align:left;vertical-align:top}
+table.pr-bit th{background:var(--surface-2);color:var(--ink-3);font-weight:600;text-transform:uppercase;letter-spacing:.04em;font-size:9px}
+table.pr-bit td.k{color:var(--accent)}
+table.pr-bit tr:last-child td{border-bottom:0}
+table.pr-bit td.good{color:var(--ok)}
+table.pr-bit td.bad{color:var(--warn)}
+.pr-bit .rowlink{border:0;background:none;padding:0;color:var(--link);font:inherit;cursor:pointer;text-align:left;text-decoration:underline dotted}
+.pr-bit .rowlink:hover{color:var(--accent)}
+/* extra LA lanes + segment kinds */
+.pr-la .trace.clk{stroke:var(--ink-3)}
+.pr-la .trace.miso{stroke:var(--violet)}
+.pr-la .segbox.data{fill:color-mix(in oklab, var(--steel) 12%, var(--surface))}
+.pr-la .segbox.lost{fill:color-mix(in oklab, var(--warn) 20%, var(--surface));stroke:var(--warn)}
+.pr-la .segbox.nack{fill:color-mix(in oklab, var(--warn) 16%, var(--surface));stroke:var(--warn)}
+.pr-la .segbox.restart{fill:color-mix(in oklab, var(--violet) 16%, var(--surface));stroke:var(--violet)}
+.pr-la .edge{fill:var(--ok)}
+.pr-la .edge.bad{fill:var(--warn)}
+.pr-la .elab{fill:var(--ink-3);font:7px var(--mono);text-anchor:middle}
+/* register ring (SPI) */
+.pr-ring{display:flex;align-items:center;gap:10px;flex-wrap:wrap;justify-content:center;margin:8px 0}
+.pr-ring .ff{display:inline-flex;border:1px solid var(--rule);border-radius:2px;overflow:hidden}
+.pr-ring .ff b{width:20px;text-align:center;font:600 11px var(--mono);padding:5px 0;border-right:1px solid var(--rule-soft);background:var(--surface);color:var(--ink-3)}
+.pr-ring .ff b:last-child{border-right:0}
+.pr-ring .ff b.one{background:var(--accent);color:var(--surface)}
+.pr-ring .ff b.nx{background:color-mix(in oklab, var(--violet) 30%, var(--surface));color:var(--ink)}
+.pr-ring .arw{color:var(--accent);font:700 14px var(--mono)}
+.pr-ring .rn{font:600 9px var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--ink-3);width:100%;text-align:center}
 
 </style>
 <body>

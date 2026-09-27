@@ -4237,14 +4237,36 @@ arm-none-eabi-objcopy -O binary \
   var protocolsInited = false;
 
   var PR_STAGE_META = [
-    { id: 1, name: "Signals 101",    tag: "drive + pull = level" },
-    { id: 2, name: "The frame",       tag: "one byte on a wire" },
-    { id: 3, name: "Sampling & baud", tag: "the receiver's clock" },
-    { id: 4, name: "Terminal",        tag: "type -> frame -> decode" }
+    { id: 1, fam: "basics", name: "Signals 101",    tag: "drive + pull = level" },
+    { id: 7, fam: "basics", name: "Protocol map",    tag: "what every protocol shares" },
+    { id: 2, fam: "uart",   name: "The frame",       tag: "one byte on a wire" },
+    { id: 3, fam: "uart",   name: "Sampling & baud", tag: "the receiver's clock" },
+    { id: 4, fam: "uart",   name: "Terminal",        tag: "type -> frame -> decode" },
+    { id: 5, fam: "i2c",    name: "I2C: shared wire", tag: "wired-AND arbitration" },
+    { id: 6, fam: "i2c",    name: "I2C: address + ACK", tag: "who is this for?" },
+    { id: 8, fam: "spi",    name: "SPI: four modes", tag: "CPOL/CPHA pick the edge" },
+    { id: 9, fam: "spi",    name: "SPI: the shift ring", tag: "you read last transaction" }
+  ];
+  var PR_FAMILIES = [
+    { id: "basics", name: "Basics", blurb: "levels, timing, the shared vocabulary" },
+    { id: "uart",   name: "UART",   blurb: "agreed clock, one wire each way" },
+    { id: "i2c",    name: "I\u00b2C",    blurb: "shared clock, shared data, addressing" },
+    { id: "spi",    name: "SPI",    blurb: "clocked by the sender, full duplex by physics" }
   ];
   function prStageById(n) {
     for (var i = 0; i < PR_STAGE_META.length; i++) { if (PR_STAGE_META[i].id === n) { return PR_STAGE_META[i]; } }
     return null;
+  }
+  function prFamOfStage(n) { var m = prStageById(n); return m ? m.fam : "basics"; }
+  function prStagesInFam(f) {
+    return PR_STAGE_META.filter(function (s) { return s.fam === f; });
+  }
+  function prFamById(f) {
+    for (var i = 0; i < PR_FAMILIES.length; i++) { if (PR_FAMILIES[i].id === f) { return PR_FAMILIES[i]; } }
+    return PR_FAMILIES[0];
+  }
+  function prFamDoneCount(f) {
+    var n = 0; prStagesInFam(f).forEach(function (s) { if (protos.goals[s.id]) { n++; } }); return n;
   }
 
   function prDefaults() {
@@ -4253,6 +4275,9 @@ arm-none-eabi-objcopy -O binary \
       sig:   { drive: "push", out: 1, pull: "none" },
       wire:  { aOut: 1, bOut: 0 },
       uart:  { data: 8, parity: "none", stop: 1, baud: 9600, clk: 8000000, char: 0x48, drift: 0, tx: null, queue: [], sent: 0, errSeen: false, last: null },
+      i2c:   { addr: 0x50, rw: 0, tx: null, sends: 0, collisions: 0, acked: 0, competitor: false, abort: false, m1val: 0xa0, m2val: 0x80, result: null, aOut: 1, bOut: 0 },
+      spi:   { byte: 0x3f, mMode: 0, sMode: 0, tx: null, sends: 0, mismatches: 0, okReads: 0, lastGot: null, result: null, slaveShift: 0xca, slavePar: 0x2c, masterIn: null, exchanges: 0, staleSeen: false, freshRead: false },
+      seen:  {},
       rxLog: [],
       goals: {},
       log: []
@@ -4263,12 +4288,12 @@ arm-none-eabi-objcopy -O binary \
   function prLoad() {
     var s = rd(K_PROTOS, null), d = prDefaults();
     if (!s || typeof s !== "object") { protos = d; prSeedLog(); return; }
-    ["sig", "wire", "uart"].forEach(function (g) {
+    ["sig", "wire", "uart", "i2c", "spi"].forEach(function (g) {
       if (s[g] && typeof s[g] === "object") { for (var f in d[g]) { if (!(f in s[g])) { s[g][f] = d[g][f]; } } }
       else { s[g] = JSON.parse(JSON.stringify(d[g])); }
     });
     /* a half-frame is never worth restoring */
-    s.uart.tx = null; s.uart.queue = [];
+    s.uart.tx = null; s.uart.queue = []; s.i2c.tx = null; s.spi.tx = null;
     if (typeof s.uart.char !== "number") { s.uart.char = d.uart.char; }
     if (typeof s.uart.drift !== "number") { s.uart.drift = 0; }
     if (typeof s.uart.baud !== "number") { s.uart.baud = d.uart.baud; }
@@ -4276,7 +4301,8 @@ arm-none-eabi-objcopy -O binary \
     if (!Array.isArray(s.rxLog)) { s.rxLog = []; }
     if (!Array.isArray(s.log)) { s.log = []; }
     if (!s.goals || typeof s.goals !== "object") { s.goals = {}; }
-    if (typeof s.stage !== "number" || s.stage < 1 || s.stage > PR_STAGE_META.length) { s.stage = 1; }
+    if (typeof s.stage !== "number" || s.stage < 1 || s.stage > 9 || !prStageById(s.stage)) { s.stage = 1; }
+    if (!s.seen || typeof s.seen !== "object") { s.seen = {}; }
     for (var k in d) { if (!(k in s)) { s[k] = d[k]; } }
     protos = s;
   }
@@ -4581,7 +4607,583 @@ arm-none-eabi-objcopy -O binary \
     t.insertBefore(div.firstChild, t.firstChild);
   }
 
+  /* ---- I2C (stages 5 + 6): the wire is a shared AND; every transfer opens with an address ---- */
+  function prI2cBit(v, i) { return (v >>> (6 - i)) & 1; }
+  function prAddrByte(addr, rw) { return ((addr & 0x7f) << 1) | (rw & 1); }
+  var PR_I2C_SLAVE = 0x50;
+
+  function prI2cMasters(m1val, m2val) {
+    var slots = [{ sda: 1, scl: 1, lab: 'S', kind: 'start' }], lostAt = -1;
+    for (var i = 0; i < 8; i++) {
+      var w1 = prI2cBit(m1val, i), w2 = prI2cBit(m2val, i);
+      var bus = w1 & w2, loser = null;
+      if (lostAt < 0 && w1 === 1 && bus === 0) { loser = 'M1'; lostAt = i; }
+      else if (lostAt < 0 && w2 === 1 && bus === 0) { loser = 'M2'; lostAt = i; }
+      slots.push({ sda: bus, scl: 1, lab: i < 7 ? 'A' + (6 - i) : 'R/W', kind: loser ? 'lost' : 'data', loser: loser, w1: w1, w2: w2, bus: bus });
+    }
+    slots.push({ sda: 0, scl: 1, lab: 'A', kind: 'ack' });
+    slots.push({ sda: 1, scl: 0, lab: 'P', kind: 'stop' });
+    return { slots: slots, lostAt: lostAt };
+  }
+
+  function prI2cTxSlots(addr, rw, acked, includeData) {
+    var slots = [{ sda: 1, scl: 1, lab: 'S', kind: 'start' }], ab = prAddrByte(addr, rw), i;
+    for (i = 0; i < 8; i++) { slots.push({ sda: prI2cBit(ab, i), scl: 1, lab: i < 7 ? 'A' + (6 - i) : 'R/W', kind: 'data' }); }
+    slots.push({ sda: acked ? 0 : 1, scl: 1, lab: acked ? 'ACK' : 'NACK', kind: acked ? 'ack' : 'nack' });
+    if (includeData) {
+      for (i = 0; i < 8; i++) { slots.push({ sda: prI2cBit(0xA5, i), scl: 1, lab: 'D' + (7 - i), kind: 'data' }); }
+      slots.push({ sda: 0, scl: 1, lab: 'A', kind: 'ack' });
+    }
+    slots.push({ sda: 1, scl: 0, lab: 'P', kind: 'stop' });
+    return slots;
+  }
+
+  function prI2cSrSlots(addr, acked) {
+    var slots = prI2cTxSlots(addr, 0, acked, true).slice(0, -1);
+    slots.push({ sda: 0, scl: 1, lab: 'S', kind: 'start' });
+    slots.push({ sda: 0, scl: 1, lab: 'Sr', kind: 'restart' });
+    var rab = prAddrByte(addr, 1);
+    for (var i = 0; i < 8; i++) { slots.push({ sda: prI2cBit(rab, i), scl: 1, lab: i < 7 ? 'A' + (6 - i) : 'R/W', kind: 'data' }); }
+    slots.push({ sda: acked ? 0 : 1, scl: 1, lab: acked ? 'ACK' : 'NACK', kind: acked ? 'ack' : 'nack' });
+    for (i = 0; i < 8; i++) { slots.push({ sda: prI2cBit(0x2C, i), scl: 1, lab: 'D' + (7 - i), kind: 'data' }); }
+    slots.push({ sda: 1, scl: 1, lab: 'M', kind: 'ack' });
+    slots.push({ sda: 1, scl: 0, lab: 'P', kind: 'stop' });
+    return slots;
+  }
+
+  function prI2cGeom(n) {
+    return { n: n, left: 40, right: 8, W: 300, cw: (300 - 48) / n, play: 'pr-i2c-play' };
+  }
+
+  var _prPlay = null;
+  function prPlaySetup(g) { _prPlay = { id: g.play, left: g.left, cw: g.cw, n: g.n }; }
+  function prPts(slots, get, yH, yL, left, cw) {
+    var pts = '', prevY = yH;
+    for (var i = 0; i < slots.length; i++) {
+      var y = get(slots[i]) ? yH : yL, x0 = left + i * cw, x1 = x0 + cw;
+      pts += x0.toFixed(1) + ',' + prevY + ' ' + x0.toFixed(1) + ',' + y + ' ' + x1.toFixed(1) + ',' + y + ' ';
+      prevY = y;
+    }
+    return pts.trim();
+  }
+  function prIAL2(slots, opt) {
+    var n = slots.length, g = prI2cGeom(n), W = g.W, left = g.left, cw = g.cw;
+    prPlaySetup(g);
+    var scl = prPts(slots, function (s) { return s.scl; }, 30, 48, left, cw);
+    var sda = prPts(slots, function (s) { return s.sda; }, 64, 86, left, cw);
+    var i, grid = '';
+    for (i = 1; i < n; i++) { var gx = (left + i * cw).toFixed(1); grid += '<line class="grid" x1="' + gx + '" y1="24" x2="' + gx + '" y2="118"/>'; }
+    var boxes = '';
+    for (i = 0; i < n; i++) {
+      var bx = left + i * cw;
+      boxes += '<rect class="segbox ' + slots[i].kind + '" x="' + (bx + 0.5).toFixed(1) + '" y="98" width="' + (cw - 1).toFixed(1) + '" height="20"/>' +
+        '<text class="seglab" x="' + (bx + cw / 2).toFixed(1) + '" y="111">' + esc(slots[i].lab) + '</text>';
+    }
+    var px = (left + Math.max(0, Math.min(opt.playIdx == null ? 0 : opt.playIdx, n)) * cw).toFixed(1);
+    var playAttr = opt.playId === _prPlay.id ? ' x1="' + px + '" x2="' + px + '"' : '';
+    var play = '<line id="' + _prPlay.id + '" class="play"' + playAttr + ' opacity="' + (opt.playIdx == null ? '0' : '1') + '" y1="18" y2="120"/>';
+    return '<div class="pr-la"><svg viewBox="0 0 ' + W + ' 150">' +
+      '<text class="clab" x="5" y="43">SCL</text><text class="clab" x="5" y="79">SDA</text>' +
+      '<polyline class="trace scl2" points="' + scl + '"/>' +
+      '<polyline class="trace" points="' + sda + '"/>' +
+      grid + boxes + play + '</svg></div>';
+  }
+
+  function prI2cLive() { return _prAnim && _prAnim.kind === 'i2c' ? _prAnim : null; }
+  function prI2cBanner(slots, res) {
+    var a = prI2cLive(), i;
+    if (a) { return 't = <b>' + Math.min(Math.floor(a.pos), slots.length) + '/' + slots.length + '</b> clocks \u00b7 watch the table fill as the line resolves'; }
+    if (res == null) { return 'idle \u2014 the pull-ups hold both lines high. Press send.'; }
+    if (res.lostAt != null) {
+      var txt = 'Arbitration over at <b>A' + (6 - res.lostAt) + '</b>: ' + (res.loser === 'M1' ? 'M1' : 'M2') + ' wanted 1, read 0 back \u2014 it drops out. <b>' + (res.loser === 'M1' ? 'M2' : 'M1') + ' owns the bus</b> and the slave ACKs.';
+      for (i = 0; i < slots.length; i++) { if (slots[i].loser) { txt += ' <span class="bad">(marker: slot ' + (i + 1) + ')</span>'; break; } }
+      return txt;
+    }
+    return res.rw === 0 ? 'EEPROM 0x50 saw its own byte <b>0x' + prAddrByte(res.addr, 0).toString(16).toUpperCase() + '</b> and ACKed (SDA held low at clock 9). The sensor at 0x3C stayed deaf.' : 'EEPROM 0x50 ACKed the <b>read</b> address \u2014 now <em>it</em> drives the data byte.';
+  }
+
+  function prI2cCtlCard() {
+    var u = protos.i2c;
+    return '<section class="pf-card"><h3>Two masters, one wire<span class="pf-sub">both start talking at once</span></h3>' +
+      '<div class="pr-ctlrow"><span class="lbl">M1 address</span><input id="pr-i2c-m1" size="4" maxlength="2" value="' + u.m1val.toString(16).toUpperCase() + '"/>' +
+        '<span class="lbl">M2 address</span><input id="pr-i2c-m2" size="4" maxlength="2" value="' + u.m2val.toString(16).toUpperCase() + '"/></div>' +
+      '<div class="pr-ctlrow"><button type="button" class="btn" id="pr-i2c-send"' + (u.tx ? ' disabled' : '') + '>\u25b6 Send both (watch them fight)</button>' +
+        '<button type="button" class="btn mini" data-i2cpair="50,40">0x50 vs 0x40</button>' +
+        '<button type="button" class="btn mini" data-i2cpair="50,50">identical</button>' +
+        '<button type="button" class="btn mini" data-i2cpair="40,50">M2 first</button></div>' +
+      '<p class="pf-hint">Both masters send a START, then their address byte MSB-first, <b>open-drain</b> \u2014 the wire is the AND of whatever the two drivers allow. The first clock where one wants <b>1</b> and the other sinks <b>0</b> decides the winner: the loser sees its own 1 come back as 0 and drops off mid-byte, never disturbing the transfer.</p></section>';
+  }
+  function prI2cBusCard() {
+    var u = protos.i2c, lvl = prWireResolve(u.aOut, u.bOut);
+    var svg = '<svg viewBox="0 0 300 64">' +
+      '<line class="rail" x1="40" y1="32" x2="260" y2="32"/>' +
+      '<line class="rail" x1="70" y1="32" x2="70" y2="46"/><rect class="res' + (u.aOut ? '' : ' act') + '" x="58" y="46" width="24" height="16"/><text class="lab" x="70" y="57" text-anchor="middle">M1</text>' +
+      '<line class="rail" x1="230" y1="32" x2="230" y2="46"/><rect class="res' + (u.bOut ? '' : ' act') + '" x="218" y="46" width="24" height="16"/><text class="lab" x="230" y="57" text-anchor="middle">M2</text>' +
+      '<circle class="node ' + lvl + '" cx="150" cy="32" r="9"/><text class="lab" x="150" y="18" text-anchor="middle">SDA = ' + lvl.toUpperCase() + '</text></svg>';
+    return '<section class="pf-card"><h3>Hand-drive the AND<span class="pf-sub">become both masters yourself</span></h3><div class="pr-wire">' + svg + '</div>' +
+      '<div class="pr-ctlrow">' +
+        '<button type="button" class="btn" data-i2ca="' + (u.aOut ? 0 : 1) + '" aria-pressed="' + String(!!u.aOut) + '">M1: ' + (u.aOut ? 'wants 1 (released)' : 'sinks 0') + '</button>' +
+        '<button type="button" class="btn" data-i2cb="' + (u.bOut ? 0 : 1) + '" aria-pressed="' + String(!!u.bOut) + '">M2: ' + (u.bOut ? 'wants 1 (released)' : 'sinks 0') + '</button>' +
+        '<span class="pr-level ' + lvl + '">SDA = ' + lvl.toUpperCase() + '</span></div>' +
+      '<p class="pf-hint">The line is high only while <b>both</b> let go. This exact wiring is what the animation above resolves one clock at a time \u2014 and it is why a losing master can drop out at any bit without damaging the winner\u2019s byte.</p></section>';
+  }
+  function prI2cWaveCard() {
+    var u = protos.i2c;
+    var res = u.result && u.result.kind === 'masters' ? u.result : null;
+    var slots = res ? res.slots : prI2cMasters(u.m1val, u.m2val).slots;
+    return '<section class="pf-card"><h3>Logic analyser<span class="pf-sub">SCL + SDA, decode band under every clock</span></h3>' +
+      prIAL2(slots, { playIdx: res ? null : 0, playId: 'pr-i2c-play' }) +
+      '<div class="pr-read" id="pr-i2c-read">' + prI2cBanner(slots, res) + '</div></section>';
+  }
+  function prI2cTableCard() {
+    var u = protos.i2c;
+    var res = u.result && u.result.kind === 'masters' ? u.result : null;
+    var slots = res ? res.slots : prI2cMasters(u.m1val, u.m2val).slots;
+    var a = prI2cLive(), upto = a ? Math.min(Math.floor(a.pos), slots.length) : slots.length;
+    var rows = '', i;
+    for (i = 1; i <= 8; i++) {
+      var s = slots[i], settled = i < upto || (i === upto && !a);
+      rows += '<tr><td class="k">' + (i <= 7 ? 'A' + (7 - i) : 'R/W') + '</td><td>' + (s.w1 != null ? s.w1 : '?') + '</td><td>' + (s.w2 != null ? s.w2 : '?') + '</td>' +
+        '<td class="' + (s.loser ? 'bad' : 'good') + '">' + (settled && s.bus != null ? s.bus : '?') + (s.loser ? ' \u2190 ' + s.loser + ' loses' : '') + '</td></tr>';
+    }
+    return '<section class="pf-card" id="pr-i2c-table"><h3>Bit by bit<span class="pf-sub">intent vs what the wire says</span></h3>' +
+      '<table class="pr-bit tbl"><tr><th>clock</th><th>M1 wants</th><th>M2 wants</th><th>wire reads</th></tr>' + rows + '</table>' +
+      '<p class="pf-hint">The moment a driver reads back <b>0</b> while sending <b>1</b>, it knows another master is sinking the line \u2014 and quits between clocks. Nobody resets anybody; the wire itself is the arbiter.</p></section>';
+  }
+  function prI2cStage5() {
+    return prCols(
+      prTeach('The shared wire decides, politely',
+        '<p>Two masters can start talking at the same instant \u2014 I\u00b2C survives that because every driver is <b>open-drain</b> (exactly the stage-1 rig) and the line is a <b>wired-AND</b>: a 0 from anyone wins. Each sender compares every bit it drives against the bit it <em>reads</em>; the first time it sends 1 and sees 0, it backs off for good. No reset, no priority list \u2014 the address itself is the priority, because the byte diverges at the first 0-bit.</p>' +
+        '<p>Send 0x50 against 0x40 and watch where the table turns red: the data collides at bit A4 (0x5 = 101, 0x4 = 100 \u2014 one of them is a 1 where the other sinks a 0). The loser simply stops driving; the winner never notices a thing.</p>') +
+      prI2cCtlCard() + prI2cBusCard(),
+      prI2cWaveCard() + prI2cTableCard(),
+      prGoalCard(5) + prCodeCard('This is what the winner ships', PR_I2C_CODE_STATIC) + prLogCard());
+  }
+
+  function prI2cAddrCtlCard() {
+    var u = protos.i2c;
+    return '<section class="pf-card"><h3>Who is this for?<span class="pf-sub">the bus has one talker and many listeners</span></h3>' +
+      '<div class="pr-ctlrow"><span class="lbl">7-bit address</span><input id="pr-i2c-addr" size="4" maxlength="2" value="' + u.addr.toString(16).toUpperCase() + '"/>' +
+        '<span class="lbl">R/W</span>' + prSeg('i2crw', [{ v: '0', t: 'write' }, { v: '1', t: 'read' }], String(u.rw)) + '</div>' +
+      '<div class="pr-ctlrow"><button type="button" class="btn" id="pr-i2c-send6"' + (u.tx ? ' disabled' : '') + '>\u25b6 Send START + address</button>' +
+        '<button type="button" class="btn" id="pr-i2c-sr"' + (u.tx ? ' disabled' : '') + '>\u21ba Repeated start: write, then read</button></div>' +
+      '<div class="pr-ctlrow"><button type="button" class="btn mini" data-i2caddr="50">EEPROM 0x50 (present)</button>' +
+        '<button type="button" class="btn mini" data-i2caddr="3c">sensor 0x3C (present)</button>' +
+        '<button type="button" class="btn mini" data-i2caddr="77">0x77 (nobody home)</button></div>' +
+      '<p class="pf-hint">Every I\u00b2C transaction opens the same way: START, then a <b>7-bit address + one R/W bit</b> packed into the first byte on the wire \u2014 the byte you see in datasheets as <code>0xA0</code> is really <code>0x50 &lt;&lt; 1 | write</code>. All slaves listen; only the named one answers clock 9 by sinking SDA (<b>ACK</b>). Silence (<b>NACK</b>) means nobody lives there, and the master aborts with a STOP.</p></section>';
+  }
+  function prI2cAddrWaveCard() {
+    var u = protos.i2c;
+    var res = u.result && u.result.kind !== 'masters' ? u.result : null;
+    var slots = res ? res.slots : prI2cTxSlots(u.addr, u.rw, u.addr === PR_I2C_SLAVE, false);
+    return '<section class="pf-card" id="pr-i2c-wavecard">' +
+      '<h3>Logic analyser<span class="pf-sub">' + esc(prHex(prAddrByte(u.addr, u.rw))) + ' on the wire = addr ' + esc(prHex(u.addr)) + ' + R/W ' + u.rw + '</span></h3>' +
+      prIAL2(slots, { playIdx: res ? null : 0, playId: 'pr-i2c-play' }) +
+      '<div class="pr-read" id="pr-i2c-read">' + prI2cAddrBanner(slots, res) + '</div></section>';
+  }
+  function prI2cAddrBanner(slots, res) {
+    var a = prI2cLive(), i;
+    if (a) { return 't = <b>' + Math.min(Math.floor(a.pos), slots.length) + '/' + slots.length + '</b> clocks \u00b7 all but one listener is already silent'; }
+    if (res == null) { return 'idle \u2014 SCL and SDA rest high on their pull-ups.'; }
+    var ackSlot = -1;
+    for (i = 0; i < slots.length; i++) { if (slots[i].kind === 'ack' || slots[i].kind === 'nack') { ackSlot = i; break; } }
+    if (res.kind === 'nack') { return 'Address byte <b>' + esc(prHex(prAddrByte(res.addr, res.rw))) + '</b> sent \u2014 clock 9: SDA stays <b>high</b>. <span class="bad">NACK: nobody named 0x' + res.addr.toString(16).toUpperCase() + ' on this bus.</span> Master issues STOP and tries nothing further.'; }
+    if (res.kind === 'sr') { return 'Write phase ACKed \u2192 <b>repeated START</b> without releasing the bus \u2192 read address ACKed \u2192 the EEPROM clocks 0x2C back to the master \u2192 master NACKs the last byte (\u201cthat\u2019s all\u201d) \u2192 STOP. One claim, two phases \u2014 exactly how a register read is built.'; }
+    return 'Address byte <b>' + esc(prHex(prAddrByte(res.addr, res.rw))) + '</b> sent \u2014 clock 9: <span class="good">ACK (SDA pulled low by 0x' + res.addr.toString(16).toUpperCase() + ')</span>. The named slave is now listening for the data byte.';
+  }
+  function prI2cSlavesCard() {
+    var u = protos.i2c;
+    var res = u.result && u.result.kind !== 'masters' ? u.result : null;
+    function row(name, addr, present) {
+      var hearing = res ? (res.addr === addr) : (u.addr === addr);
+      var state = !res ? (present ? 'listening' : 'listening') : (res.addr === addr ? (res.kind === 'nack' ? '<span class="bad">NACK \u2014 empty slot</span>' : '<span class="good">ACK \u2014 it answers</span>') : (present ? 'silent \u2014 not its number' : 'silent'));
+      return '<tr><td>' + name + '</td><td class="k">0x' + addr.toString(16).toUpperCase() + '</td><td>' + state + '</td></tr>';
+    }
+    return '<section class="pf-card"><h3>Who answers?\u00b7<span class="pf-sub">every slave compares clock-by-clock</span></h3>' +
+      '<table class="pr-bit tbl"><tr><th>device</th><th>address</th><th>this transfer</th></tr>' +
+      row('EEPROM', PR_I2C_SLAVE, true) + row('temp sensor', 0x3c, true) + row('slot 0x77', 0x77, false) + '</table>' +
+      '<p class="pf-hint">A slave that sees its own address ACKs and starts listening for data; one that doesn\u2019t goes completely deaf until the next START. A <b>general call</b> (address 0x00) is the exception \u2014 everyone ACKs, no data follows. That\u2019s the entire addressing protocol; everything else is data.</p></section>';
+  }
+  function prI2cStage6() {
+    return prCols(
+      prTeach('Address, then data, then done',
+        '<p>Stage 5 decided <em>who</em> talks; stage 6 is <em>to whom</em>. After arbitration (or a quiet bus), the winner emits START and the first byte: <b>7-bit address + R/W</b>. This is the whole reason HAL calls take <code>0xA0</code> where the datasheet headline says <code>0x50</code> \u2014 one value on the wire, one value in prose. The 9th clock belongs to the <em>receiver</em>: the addressed slave sinks SDA for ACK or leaves it high for NACK.</p>' +
+        '<p>A <b>repeated start</b> (Sr) is the last trick: to read a register you write the register address, then Sr, then the same slave address with R/W=1 \u2014 without ever releasing the bus, so no other master can interleave between the two phases. Send a bad address and feel the NACK; send Sr and watch one claim span two directions.</p>') +
+      prI2cAddrCtlCard(),
+      prI2cAddrWaveCard() + prI2cSlavesCard(),
+      prGoalCard(6) + prCodeCard('The two levels of the same transaction', PR_I2C_CODE_TWO) + prLogCard());
+  }
+
+  /* ---- I2C animation + tick ---- */
+  var _prAnim = null;
+  function prAnimStop() { _prAnim = null; }
+  function prI2cTick() {
+    var st = protos.stage, u = protos.i2c;
+    if (!_prAnim || _prAnim.kind !== 'i2c') {
+      if ((st === 5 || st === 6) && u.tx) { _prAnim = { kind: 'i2c', pos: 0, total: u.tx.slots.length, cur: 0, tx: u.tx }; return true; }
+      return false;
+    }
+    if (!protos.running || !u.tx) { _prAnim = null; return false; }
+    _prAnim.pos += 0.55;
+    var k = Math.floor(_prAnim.pos);
+    if (k > _prAnim.cur && k <= u.tx.slots.length) { _prAnim.cur = k; }
+    if (_prAnim.pos >= _prAnim.total) {
+      var tx = u.tx; u.tx = null; _prAnim = null;
+      u.sends++;
+      if (tx.kind === 'masters') {
+        var lz = null; for (var i = 0; i < tx.slots.length; i++) { if (tx.slots[i].loser) { lz = tx.slots[i].loser; break; } }
+        if (tx.lostAt >= 0) {
+          u.collisions++;
+          u.result = { kind: 'masters', slots: tx.slots, lostAt: tx.lostAt, loser: lz };
+          prLog('err', 'arbitration: ' + lz + ' lost at A' + (6 - tx.lostAt) + ' \u2014 dropped off, ' + (lz === 'M1' ? 'M2' : 'M1') + ' finished the byte');
+        } else {
+          u.result = { kind: 'masters', slots: tx.slots, lostAt: null };
+          prLog('note', 'both masters sent the identical byte \u2014 no divergence, no loser; one of them keeps talking and both believe they won (this is not a feature)');
+        }
+      } else {
+        var acked = tx.addr === PR_I2C_SLAVE;
+        if (acked) { u.acked++; }
+        u.result = { kind: acked ? (tx.sr ? 'sr' : 'ack') : 'nack', slots: tx.slots, addr: tx.addr, rw: tx.rw };
+        prLog(acked ? 'ok' : 'err', (acked ? 'ACK from 0x' + tx.addr.toString(16).toUpperCase() : 'NACK \u2014 0x' + tx.addr.toString(16).toUpperCase() + ' is not on this bus') + (tx.sr ? ' (repeated-start transfer)' : ''));
+      }
+      prSave(); prRenderStatic();
+      return true;
+    }
+    return true;
+  }
+
+  function prSpiLive() { return _prAnim && _prAnim.kind === 'spi' ? _prAnim : null; }
+
+  /* ---- SPI animation + tick ---- */
+  function prSpiTick() {
+    var st = protos.stage, u = protos.spi;
+    if (!_prAnim || _prAnim.kind !== 'spi') {
+      if ((st === 8 || st === 9) && u.tx) {
+        _prAnim = { kind: 'spi', pos: 0, total: u.tx.kind === 'ring' ? 8 : 16, cur: 0, tx: u.tx };
+        return true;
+      }
+      return false;
+    }
+    if (!protos.running || !u.tx) { _prAnim = null; return false; }
+    _prAnim.pos += u.tx.kind === 'ring' ? 0.34 : 0.5;
+    if (_prAnim.pos < _prAnim.total) { return true; }
+    var tx = u.tx; u.tx = null; _prAnim = null;
+    if (tx.kind === 'modes') {
+      var got = prSpiRecv(tx.m, tx.s, prSpiBits(tx.out));
+      u.sends++; u.lastGot = got;
+      var morph = prSpiMorph(tx.m, tx.s);
+      if (morph === 'match') { u.okReads++; } else { u.mismatches++; }
+      u.result = { kind: 'modes', sent: tx.out, got: got, morph: morph };
+      prLog(morph === 'match' ? 'ok' : 'err', 'mode ' + tx.m + ' master / mode ' + tx.s + ' slave: ' +
+        prHex(tx.out) + ' \u2192 ' + prHex(got) + (morph === 'match' ? ' \u2713' : morph === 'marginal' ? ' (sampled on the change edge \u2014 lucky today)' : ' (shifted by one)'));
+    } else {
+      var before = u.slaveShift, parBefore = u.slavePar;
+      u.exchanges++;
+      var stale = before !== parBefore;
+      if (stale) { u.staleSeen = true; }
+      else if (u.staleSeen) { u.freshRead = true; }
+      u.masterIn = before;
+      u.slaveShift = parBefore;                       /* parallel load at the transfer edge */
+      u.result = { kind: 'ring', got: before, out: tx.out, stale: stale };
+      prLog(stale ? 'err' : 'ok', 'exchange ' + prHex(tx.out) + ' \u2192 master latched ' + prHex(before) +
+        (stale ? ' (stale: the new conversion was still waiting to load)' : ' (fresh \u2014 this is the current measurement)'));
+    }
+    prSave(); prRenderStatic();
+    return true;
+  }
+
+  /* ---- goals 5 + 6 ---- */
+  var PR_I2C_CODE_STATIC = '/* every I2C driver you will ever ship starts like this */\nI2C1->CR1 |= I2C_CR1_PE;               /* peripheral enable */\nI2C1->CR2 = 8;                          /* 8 MHz kernel clock */\nI2C1->CCR = 40; I2C1->TRISE = 9;        /* ~100 kHz standard mode */\n\n/* start talking: START, then the address byte MSB-first */\nI2C1->CR1 |= I2C_CR1_START;\nwhile ((I2C1->SR1 & I2C_SR1_SB) == 0) { }\nI2C1->DR = (0x50u << 1) | 0u;           /* 0xA0 = 0x50 + write */\n\n/* arbitration is not code you write - it is physics you rely on:\n   drive 1 = release, read the line back; 1 sent / 0 seen = quit. */';
+  var PR_I2C_CODE_TWO = '/* the same transaction seen from two altitudes */\n\n/* 1) a register read on a typical sensor */\nuint8_t v = I2C_ReadReg(0x3C, REG_WHO_AM_I);\n\n/* 2) what it expands to on the wire */\nI2C1->CR1 |= I2C_CR1_START;\nI2C1->DR = (0x3Cu << 1) | 0u;           /* 0x78: address + write */\nI2C1->DR = REG_WHO_AM_I;                /* register pointer       */\nI2C1->CR1 |= I2C_CR1_START;             /* Sr: keep the bus, flip */\nI2C1->DR = (0x3Cu << 1) | 1u;           /* 0x79: address + read   */\nv = I2C1->DR;                           /* the slave drives this  */\nI2C1->CR1 |= I2C_CR1_STOP;\n\n/* datasheet address 0x3C; wire byte 0x78 or 0x79. The bus has room\n   for 128 devices, 16 of them reserved. Count them before you buy. */\n\n/* the bus has room for 128 devices (16 reserved) */\n/* HAL convention: it hands you the wire byte, datasheets print the */\n/* 7-bit address: 0xA0 >> 1 = 0x50. One shift, endless confusion. */';
+
+
+  /* ---- SPI (stages 8 + 9): the sender owns the clock; the shift ring is the whole protocol ---- */
+  function prSpiCpol(m) { return (m >> 1) & 1; }
+  function prSpiCpha(m) { return m & 1; }
+  function prSpiEdge(m) { return (m === 0 || m === 3) ? 'rising' : 'falling'; }
+  function prSpiChange(m) { return (m === 0 || m === 3) ? 'falling' : 'rising'; }
+  /* half-step timeline: bit i occupies clock period i = [2i, 2i+2). Master puts bit i on
+     the line at the launch step; the window is 2 half-steps wide. */
+  function prSpiLaunch(m, i) { return 2 * i + (prSpiCpha(m) ? 0 : -1); }
+  function prSpiSample(m, s, i) {
+    var p = 2 * i + prSpiCpha(s) + (prSpiCpol(m) !== prSpiCpol(s) ? 1 : 0);
+    return ((p % 16) + 16) % 16;
+  }
+  function prSpiReadBit(m, s, bits, i) {
+    if (m === s) { return bits[i]; }
+    var j = i + Math.floor((prSpiSample(m, s, i) - prSpiLaunch(m, i)) / 2);
+    return (j >= 0 && j < bits.length) ? bits[j] : 0;
+  }
+  function prSpiBits(v) { var b = []; for (var i = 7; i >= 0; i--) { b.push((v >>> i) & 1); } return b; }
+  function prSpiFromBits(b) { var v = 0; for (var i = 0; i < 8; i++) { v = (v << 1) | (b[i] & 1); } return v; }
+  function prSpiLine(m, bits, h) {
+    var j = prSpiCpha(m) ? Math.floor(h / 2) : Math.floor((h + 1) / 2);
+    if (j < 0) { return 0; }
+    if (j > 7) { return bits[7]; }        /* line holds its last bit between transfers */
+    return bits[j];
+  }
+  function prSpiRecv(m, s, bits) {
+    var out = [], i;
+    for (i = 0; i < 8; i++) { out.push(prSpiReadBit(m, s, bits, i)); }
+    return prSpiFromBits(out);
+  }
+  function prSpiMorph(m, s) { return m === s ? 'match' : (prSpiCpol(m) === prSpiCpol(s) ? 'marginal' : 'shift'); }
+
+  /* ---- shared 2-lane LA for SPI, in half-step resolution ---- */
+  var _prSpiPlay = null;
+  function prSpiLane(steps, get, yH, yL, left, cw) {
+    var pts = '', prevY = get(steps.length ? steps[0] : 0) ? yH : yL, i;
+    pts += left.toFixed(1) + ',' + prevY + ' ';
+    for (i = 0; i < steps.length; i++) {
+      var y = get(steps[i]) ? yH : yL, x0 = left + i * cw, x1 = x0 + cw;
+      pts += x0.toFixed(1) + ',' + prevY + ' ' + x0.toFixed(1) + ',' + y + ' ' + x1.toFixed(1) + ',' + y + ' ';
+      prevY = y;
+    }
+    return pts.trim();
+  }
+  function prSpiWave(m, s, bits, opt) {
+    var left = 40, W = 300, cw = (W - 48) / 16;
+    _prSpiPlay = { left: left, cw: cw, id: (opt && opt.playId) || 'pr-spi-play' };
+    var i, steps = [], grid = '', marks = '', labs = '';
+    for (i = 0; i < 16; i++) { steps.push({ c: (i % 2 === 0) ? 1 - prSpiCpol(m) : prSpiCpol(m), d: prSpiLine(m, bits, i) }); }
+    for (i = 1; i < 16; i++) { var gx = (left + i * cw).toFixed(1); grid += '<line class="grid" x1="' + gx + '" y1="20" x2="' + gx + '" y2="112"/>'; }
+    for (i = 0; i < 8; i++) {
+      var px = left + prSpiSample(m, s, i) * cw;
+      marks += '<polygon class="edge' + (m === s ? '' : ' bad') + '" points="' + px.toFixed(1) + ',56 ' + (px - 3).toFixed(1) + ',49 ' + (px + 3).toFixed(1) + ',49"/>';
+    }
+    for (i = 0; i < 8; i++) {
+      var bx = left + (2 * i) * cw;
+      labs += '<rect class="segbox data" x="' + bx.toFixed(1) + '" y="94" width="' + (2 * cw - 1).toFixed(1) + '" height="18"/>' +
+        '<text class="seglab" x="' + (bx + cw).toFixed(1) + '" y="107">' + bits[i] + '</text>';
+    }
+    var play = '<line id="' + _prSpiPlay.id + '" class="play" x1="' + left.toFixed(1) + '" x2="' + left.toFixed(1) + '" y1="14" y2="116" opacity="' + ((opt && opt.playOn) ? '1' : '0') + '"/>';
+    return '<div class="pr-la"><svg viewBox="0 0 ' + W + ' 120">' +
+      '<text class="clab" x="5" y="33">SCLK</text><text class="clab" x="5" y="69">MOSI</text>' +
+      '<polyline class="trace clk" points="' + prSpiLane(steps, function (o) { return o.c; }, 22, 44, left, cw) + '"/>' +
+      '<polyline class="trace" points="' + prSpiLane(steps, function (o) { return o.d; }, 58, 84, left, cw) + '"/>' +
+      grid + marks + labs + play + '</svg></div>';
+  }
+
+  function prSpiModeSegCard() {
+    var u = protos.spi, rows = '', m;
+    for (m = 0; m < 4; m++) {
+      rows += '<tr><td class="k">mode ' + m + '</td><td>' + prSpiCpol(m) + '</td><td>' + prSpiCpha(m) + '</td>' +
+        '<td>' + (prSpiCpol(m) ? 'high' : 'low') + '</td><td>' + prSpiEdge(m) + '</td><td>' + prSpiChange(m) + '</td>' +
+        '<td>' + (u.mMode === m ? 'master' : '') + (u.mMode === m && u.sMode === m ? ' + slave' : (u.sMode === m ? 'slave' : '')) + '</td></tr>';
+    }
+    return '<section class="pf-card"><h3>The four modes are one 2-bit number<span class="pf-sub">CPOL sets idle, CPHA sets the edge</span></h3>' +
+      '<table class="pr-bit tbl"><tr><th>mode</th><th>CPOL</th><th>CPHA</th><th>clock idles</th><th>sample on</th><th>change on</th><th>in use</th></tr>' + rows + '</table>' +
+      '<p class="pf-hint">There is no negotiation in SPI: both sides are <b>configured</b>, and a datasheet hands you a mode number. Get the clock idle level wrong and the other side is half a period off \u2014 which is exactly the <b>bit-shifted byte</b> you will find on a logic analyser at 2 a.m.</p></section>';
+  }
+  function prSpiCtlCard() {
+    var u = protos.spi;
+    function seg(name, cur) {
+      return prSeg(name, [{ v: '0', t: '0' }, { v: '1', t: '1' }, { v: '2', t: '2' }, { v: '3', t: '3' }], String(cur));
+    }
+    return '<section class="pf-card"><h3>Two chips, one cable, maybe two opinions<span class="pf-sub">master drives, slave samples</span></h3>' +
+      '<div class="pr-ctlrow"><span class="lbl">Master mode</span>' + seg('spimm', u.mMode) +
+        '<span class="lbl">Slave mode</span>' + seg('spism', u.sMode) + '</div>' +
+      '<div class="pr-ctlrow"><span class="lbl">Byte (hex)</span><input id="pr-spi-byte" size="4" maxlength="2" value="' + u.byte.toString(16).toUpperCase() + '"/>' +
+        '<button type="button" class="btn" id="pr-spi-send"' + (u.tx ? ' disabled' : '') + '>\u25b6 Clock it out</button>' +
+        '<button type="button" class="btn mini" data-spipair="0,0">both mode 0</button>' +
+        '<button type="button" class="btn mini" data-spipair="0,1">CPHA only</button>' +
+        '<button type="button" class="btn mini" data-spipair="0,2">CPOL only</button></div>' +
+      '<p class="pf-hint">The master shifts MSB-first and clocks every bit; the slave only knows <em>when it is allowed to look</em>. Markers above the MOSI trace are the slave\u2019s sample instants \u2014 green when they sit inside the bit window, amber when they sit on an edge.</p></section>';
+  }
+  function prSpiBin(v) { var s = '', b; for (b = 7; b >= 0; b--) { s += ((v >>> b) & 1) ? '1' : '0'; } return s; }
+  function prSpiReadHtml() {
+    var u = protos.spi, a = _prAnim && _prAnim.kind === 'spi' && _prAnim.tx && _prAnim.tx.kind === 'modes' ? _prAnim : null;
+    if (a) { return 'clocking \u2014 half-step ' + Math.min(Math.floor(a.pos), 16) + '/16 \u00b7 master mode ' + u.mMode + ', slave mode ' + u.sMode; }
+    var r = u.result && u.result.kind === 'modes' ? u.result : null;
+    if (!r) { return 'idle \u2014 SCLK sits at ' + (prSpiCpol(u.mMode) ? 'high' : 'low') + '. Nothing moves until the master clocks.'; }
+    var verdict;
+    if (r.morph === 'match') {
+      verdict = '<span class="good">\u2713 same mode \u2192 the sample lands mid-window</span>';
+    } else if (r.got !== r.sent) {
+      verdict = '<span class="bad">\u2717 ' + esc(prSpiBin(r.got)) + ' is ' + esc(prSpiBin(r.sent)) + ' shifted one window \u2014 the classic mode-mismatch signature</span>';
+    } else {
+      verdict = '<span class="bad">marginal: the value survived, but the sample sits exactly on the edge where the master changes the line \u2014 this board reads it right, the next one will not</span>';
+    }
+    return 'sent <b>' + esc(prHex(r.sent)) + '</b> \u2192 slave latched <b class="' + (r.got === r.sent ? 'good' : 'bad') + '">' + esc(prHex(r.got)) + '</b> \u00b7 ' +
+      verdict + ' <span class="k">(' + u.okReads + ' matched, ' + u.mismatches + ' mismatched out of ' + u.sends + ')</span>';
+  }
+  function prSpiWaveCard() {
+    var u = protos.spi, bits = prSpiBits(u.byte);
+    return '<section class="pf-card" id="pr-spi-wavecard"><h3>Logic analyser<span class="pf-sub">SCLK + MOSI, MSB-first, ' + esc(prHex(u.byte)) + '</span></h3>' +
+      prSpiWave(u.mMode, u.sMode, bits, { playOn: false }) +
+      '<div class="pr-read" id="pr-spi-read">' + prSpiReadHtml() + '</div></section>';
+  }
+  function prSpiStage8() {
+    return prCols(
+      prTeach('The sender owns the clock, so there is no frame',
+        '<p>UART had to invent a start bit because <em>nobody</em> supplies a clock. SPI does: the master generates SCLK, one period per bit, so there is no framing, no baud error, no start/stop overhead \u2014 and no way for the slave to say anything back except on its own wire. The price is two numbers you must agree on <b>before</b> power-on: <b>CPOL</b> (which way the clock idles) and <b>CPHA</b> (which edge the receiver looks at).</p>' +
+        '<p>Four combinations, four modes, and that is the entire configuration space. Drive the clock with the wrong idle level and your neighbour samples half a period late: it reads the <em>next</em> bit, so the byte arrives shifted by one \u2014 the most recognizable corruption pattern in the field. Set both to the same mode and it just works; try the presets and read the verdict.</p>') +
+      prSpiCtlCard() + prSpiModeSegCard(),
+      prSpiWaveCard(),
+      prGoalCard(8) + prCodeCard('SPI1 in mode ' + protos.spi.mMode, prSpiModeCode()) + prLogCard());
+  }
+  function prSpiModeCode() {
+    var u = protos.spi, cpol = prSpiCpol(u.mMode), cpha = prSpiCpha(u.mMode);
+    return '/* mode ' + u.mMode + ' = CPOL ' + cpol + ' / CPHA ' + cpha + ' */\n' +
+      'SPI1->CR1 = 0;                             /* stop while reconfiguring */\n' +
+      'SPI1->CR1 |= SPI_CR1_MSTR;                 /* we generate SCLK         */\n' +
+      (cpol ? 'SPI1->CR1 |= SPI_CR1_CPOL;               /* clock idles high       */\n' : '/* CPOL = 0: clock idles low (bit stays clear) */\n') +
+      (cpha ? 'SPI1->CR1 |= SPI_CR1_CPHA;               /* sample on the 2nd edge */\n' : '/* CPHA = 0: sample on the 1st edge */\n') +
+      'SPI1->CR1 |= (4u << 3);                    /* BR: fPCLK/16             */\n' +
+      'SPI1->CR1 |= SPI_CR1_SPE;                  /* enable the peripheral    */\n\n' +
+      '/* SPI has no read command: an exchange is simultaneous in + out */\n' +
+      'SPI1->DR = ' + prHex(u.byte) + 'u;                          /* out on MOSI          */\n' +
+      'while ((SPI1->SR & SPI_SR_RXNE) == 0) { }  /* something already came in */\n' +
+      'uint8_t in = *(volatile uint8_t *)&SPI1->DR;';
+  }
+
+  /* ---- stage 9: the shift ring ---- */
+  function prSpiRingSrc(u) {
+    if (u.tx) { return { out: u.tx.out, sb: u.tx.slaveBefore }; }
+    if (u.result && u.result.kind === 'ring') { return { out: u.result.out, sb: u.result.got }; }
+    return { out: u.byte, sb: u.slaveShift };
+  }
+  function prSpiRingState(u, k) {
+    var src = prSpiRingSrc(u);
+    var B = prSpiBits(src.out), SB = prSpiBits(src.sb);
+    var m = [], sl = [], i;
+    k = Math.max(0, Math.min(8, k));
+    for (i = 0; i < 8; i++) { m.push(i < 8 - k ? B[i + k] : SB[i - (8 - k)]); }
+    for (i = 0; i < 8; i++) { sl.push(i < 8 - k ? SB[i + k] : B[i - (8 - k)]); }
+    return { master: m, slave: sl };
+  }
+  function prRingRow(name, bits, cls) {
+    var cells = '', i;
+    for (i = 0; i < 8; i++) { cells += '<b class="' + (bits[i] ? 'one' : '') + '">' + bits[i] + '</b>'; }
+    return '<span class="rn">' + esc(name) + '</span><span class="ff ' + (cls || '') + '">' + cells + '</span>';
+  }
+  function prSpiRingCard() {
+    var u = protos.spi, a = _prAnim && _prAnim.kind === 'spi' && _prAnim.tx && _prAnim.tx.kind === 'ring' ? _prAnim : null;
+    var k = a ? Math.min(Math.floor(a.pos), 8) : (u.result && u.result.kind === 'ring' ? 8 : 0);
+    var src = prSpiRingSrc(u), st = prSpiRingState(u, k);
+    return '<section class="pf-card" id="pr-spi-ring"><h3>One ring, two chips<span class="pf-sub">eight clocks = a complete swap</span></h3>' +
+      '<div class="pr-ring">' + prRingRow('master \u2014 sending ' + esc(prHex(src.out)), st.master, 'm') +
+        '<span class="arw">\u21c4</span>' + prRingRow('slave \u2014 held ' + esc(prHex(src.sb)) + ' before', st.slave, 's') + '</div>' +
+      '<div class="pr-read">' + (k === 0 ? 'every clock pushes one bit out of each chip and lets one bit in \u2014 neither register ever empties' :
+        k < 8 ? 'clock ' + k + '/8 \u00b7 ' + esc(prHex(prSpiFromBits(st.master))) + ' so far in the master, ' + esc(prHex(prSpiFromBits(st.slave))) + ' in the slave' :
+        'exchange complete \u2014 master now holds <b>' + esc(prHex(prSpiFromBits(st.master))) + '</b>, slave holds the byte you sent' + (u.result && u.result.stale ? ' <span class="bad">(that was the <em>previous</em> measurement)</span>' : ' <span class="good">(this is the current one)</span>')) + '</div>' +
+      '<p class="pf-hint">There is no such thing as an SPI <b>read</b>, only an <b>exchange</b>: while your byte travels out on MOSI, the other chip\u2019s byte travels in on MISO. So the value you get answers the question <em>“what was it about to say before I asked?”</em> \u2014 one transaction behind, every time, on every SPI device on earth.</p></section>';
+  }
+  function prSpiRingWave() {
+    var u = protos.spi, src = prSpiRingSrc(u);
+    var out = prSpiBits(src.out), inn = prSpiBits(src.sb);
+    var left = 40, W = 300, cw = (W - 48) / 16, i, steps = [], grid = '';
+    _prSpiPlay = { left: left, cw: cw, id: 'pr-spi-ring-play' };
+    for (i = 0; i < 16; i++) {
+      var j = Math.floor(i / 2);
+      steps.push({ c: (i % 2 === 0) ? 1 - prSpiCpol(u.mMode) : prSpiCpol(u.mMode), o: out[j], n: inn[j] });
+    }
+    for (i = 1; i < 16; i++) { var gx = (left + i * cw).toFixed(1); grid += '<line class="grid" x1="' + gx + '" y1="14" x2="' + gx + '" y2="136"/>'; }
+    var labs = '';
+    for (i = 0; i < 8; i++) {
+      var bx = left + (2 * i) * cw;
+      labs += '<rect class="segbox data" x="' + bx.toFixed(1) + '" y="142" width="' + (2 * cw - 1).toFixed(1) + '" height="18"/>' +
+        '<text class="seglab" x="' + (bx + cw).toFixed(1) + '" y="155">' + out[i] + '/' + inn[i] + '</text>';
+    }
+    var play = '<line id="pr-spi-ring-play" class="play" x1="' + left.toFixed(1) + '" x2="' + left.toFixed(1) + '" y1="8" y2="164" opacity="0"/>';
+    return '<div class="pr-la"><svg viewBox="0 0 ' + W + ' 168">' +
+      '<text class="clab" x="5" y="26">SCLK</text><text class="clab" x="5" y="54">MOSI</text><text class="clab" x="5" y="82">MISO</text>' +
+      '<polyline class="trace clk" points="' + prSpiLane(steps, function (o) { return o.c; }, 16, 34, left, cw) + '"/>' +
+      '<polyline class="trace" points="' + prSpiLane(steps, function (o) { return o.o; }, 46, 64, left, cw) + '"/>' +
+      '<polyline class="trace miso" points="' + prSpiLane(steps, function (o) { return o.n; }, 74, 92, left, cw) + '"/>' +
+      grid + labs + play + '</svg></div>';
+  }
+  function prSpiXferReadHtml() {
+    var u = protos.spi;
+    return 'sensor will say next: <b>' + esc(prHex(u.slaveShift)) + '</b> \u00b7 latest measurement waiting to load: <b>' + esc(prHex(u.slavePar)) + '</b>' +
+      (u.result && u.result.kind === 'ring' ? ' \u00b7 master received: <b class="' + (u.result.stale ? 'bad' : 'good') + '">' + esc(prHex(u.result.got)) + '</b>' : '');
+  }
+  function prSpiXferCtlCard() {
+    var u = protos.spi;
+    return '<section class="pf-card"><h3>Ask twice, get the answer once<span class="pf-sub">write \u2192 trigger \u2192 dummy read</span></h3>' +
+      '<div class="pr-ctlrow"><span class="lbl">Byte to clock out</span><input id="pr-spi-xbyte" size="4" maxlength="2" value="' + u.byte.toString(16).toUpperCase() + '"/></div>' +
+      '<div class="pr-ctlrow"><button type="button" class="btn" id="pr-spi-xfer"' + (u.tx ? ' disabled' : '') + '>\u25b6 Exchange</button>' +
+        '<button type="button" class="btn mini" data-spidummy="1">\u21ba Dummy read (0x00)</button>' +
+        '<button type="button" class="btn mini" data-spinew="1">\u26a1 Sensor completes a new measurement</button></div>' +
+      '<div class="pr-read" id="pr-spi-xread">' + prSpiXferReadHtml() + '</div>' +
+      '<p class="pf-hint">The measurement register is only copied into the shift ring <b>at the edge of a transfer</b>. Clock once and you shift out whatever was already queued \u2014 the previous conversion. Trigger a new measurement, then exchange a dummy <code>0x00</code>, and the fresh value walks out while your zeros walk in. This is why every SPI driver on earth writes a byte it does not care about.</p></section>';
+  }
+  function prSpiStage9() {
+    return prCols(
+      prTeach('Full duplex is not a feature, it is the wiring',
+        '<p>Two separate data wires \u2014 MOSI out, MISO in \u2014 mean both chips can shift at the same time. Nothing is ever <em>only</em> read or <em>only</em> written: eight clocks always move eight bits each way. The peripheral registers reflect that: you write to <code>SPI1-&gt;DR</code> and the same register hands you back the byte that arrived.</p>' +
+        '<p>Consequence, and this is the one people learn the hard way: the byte you receive is the one the slave had <b>ready before this transfer started</b>. Real devices lean on it \u2014 a command byte, then a dummy byte to clock the result out. If your driver reads garbage on the first attempt and the right value on the second, you have not found a bug in the part; you have found the ring.</p>') +
+      prSpiXferCtlCard() + prSpiRingCard(),
+      '<section class="pf-card" id="pr-spi-xwave"><h3>Logic analyser<span class="pf-sub">three lanes: clock, out, in</span></h3>' + prSpiRingWave() + '</section>',
+      prGoalCard(9) + prCodeCard('The two-transfer idiom', PR_SPI_RING_CODE) + prLogCard());
+  }
+  var PR_SPI_RING_CODE = '/* reading a register over SPI is always a two-step: */\n\n/* 1) the command transfer. We clock it out; whatever comes back on\n   MISO is stale data from the previous transaction - discard it.   */\nSPI1->CR1 |= SPI_CR1_CS;                   /* select the device     */\nSPI1->DR = REG_STATUS | 0x80u;             /* "give me status"      */\nwhile ((SPI1->SR & SPI_SR_RXNE) == 0) { }\n(void)*(volatile uint8_t *)&SPI1->DR;      /* throw the old byte away */\n\n/* 2) the dummy transfer. We send nothing interesting so the device\n   can send everything it has. This is the read.                  */\nSPI1->DR = 0x00u;\nwhile ((SPI1->SR & SPI_SR_RXNE) == 0) { }\nuint8_t status = *(volatile uint8_t *)&SPI1->DR;\nSPI1->CR1 &= ~SPI_CR1_CS;\n\n/* HAL hides exactly this: HAL_SPI_TransmitReceive() with a dummy TX\n   buffer. Some parts need a CS toggle between the two transfers,\n   some need CS held \u2014 read the datasheet timing diagram, not the demo. */';
+
+  /* ---- stage 7: the protocol map (the universal layer) ---- */
+  var PR_MAP_ROWS = [
+    { k: 'Wires for one transfer',
+      v: { uart: ['TX + RX (2)', 2], i2c: ['SDA + SCL (2)', 5], spi: ['SCLK + MOSI + MISO + CS (4)', 8] } },
+    { k: 'Who provides the clock',
+      v: { uart: ['nobody \u2014 both sides agree on a baud rate', 3], i2c: ['master, and the slave may stretch it', 6], spi: ['master, always, and it never waits', 8] } },
+    { k: 'Idle level of the data line',
+      v: { uart: ['high (a released line)', 1], i2c: ['high, held there by a pull-up', 1], spi: ['undefined \u2014 the slave only speaks when CS is low', 9] } },
+    { k: 'Where a byte begins',
+      v: { uart: ['a falling start bit, re-aligned every byte', 2], i2c: ['START: SDA falls while SCL is high', 6], spi: ['nowhere \u2014 the clock simply runs', 8] } },
+    { k: 'Bit order',
+      v: { uart: ['LSB first', 2], i2c: ['MSB first (A6 \u2192 A0)', 5], spi: ['MSB first by default, LRCP bit flips it', 8] } },
+    { k: 'How the receiver knows it looked at the right moment',
+      v: { uart: ['sample mid-bit, timed from the start edge', 3], i2c: ['the sender changes SDA only while SCL is low', 5], spi: ['CPHA says first or second edge; CPOL says which is first', 8] } },
+    { k: 'Addressing \u2014 how it knows who you mean',
+      v: { uart: ['it does not: point to point', 2], i2c: ['7-bit address + R/W in the first byte', 6], spi: ['a physical wire per device (chip select)', 9] } },
+    { k: 'Feedback that the byte landed',
+      v: { uart: ['none \u2014 fire and forget (parity is only a hint)', 2], i2c: ['the 9th clock: ACK or NACK', 6], spi: ['none \u2014 if MISO is silent you read 0xFF/0x00', 9] } },
+    { k: 'Two speakers at once',
+      v: { uart: ['yes: TX and RX are different wires', 4], i2c: ['no: half duplex, arbitration decides the winner', 5], spi: ['yes, always: every exchange is two-way', 9] } },
+    { k: 'What one bit flip costs you',
+      v: { uart: ['a wrong character, caught only by parity', 3], i2c: ['a lost arbitration or a NACK, self-inflicted', 5], spi: ['a byte shifted by one position', 8] } }
+  ];
+  function prMapTableCard() {
+    var rows = '';
+    PR_MAP_ROWS.forEach(function (r) {
+      rows += '<tr><td class="k">' + esc(r.k) + '</td>' +
+        ['uart', 'i2c', 'spi'].map(function (f) {
+          var cell = r.v[f];
+          return '<td>' + esc(cell[0]) + ' <button type="button" class="rowlink" data-prstage="' + cell[1] + '">stage ' + cell[1] + '</button></td>';
+        }).join('') + '</tr>';
+    });
+    return '<section class="pf-card"><h3>Same questions, three answers<span class="pf-sub">every protocol answers the same list differently</span></h3>' +
+      '<table class="pr-bit tbl"><tr><th>question</th><th>UART</th><th>I\u00b2C</th><th>SPI</th></tr>' + rows + '</table>' +
+      '<p class="pf-hint">Read it as a decision tree, not a table. No spare pins and need to reach 8 cheap devices \u2192 I\u00b2C. Need tens of MHz and a display \u2192 SPI. One wire each way and a human watching \u2192 UART. Every entry above is already modelled in this lab \u2014 the links jump to the stage where you can <b>make it fail</b>.</p></section>';
+  }
+  function prMapVocabCard() {
+    var items = [
+      ['idle level', 'what the line does when nobody drives it. On an open-drain wire a 1 means <em>let go</em> (stage 1); a floating input means <em>nobody decided anything</em> and the next reader is random.'],
+      ['framing', 'how the receiver knows a byte is starting: a start bit (UART), a START condition drawn on the clock wire (I\u00b2C), or simply asserting chip select (SPI).'],
+      ['sample instant', 'the one moment a receiver is allowed to look: mid-bit by agreement, on a clock edge chosen by CPHA, or anywhere the sender guarantees SDA is stable.'],
+      ['bit order', 'LSB first is a UART habit, MSB first is a bus habit. Get it backwards and 0x50 comes off the wire as 0x0A.'],
+      ['acknowledgement', 'the receiver\u2019s only voice: parity hints, ACK clocks confirm, SPI stays silent and lies.'],
+      ['arbitration', 'what happens when two masters disagree: I\u00b2C resolves it electrically with a wired-AND; SPI just drives two outputs into each other and hopes.'],
+      ['clock domain', 'whether the sender supplies the clock (I\u00b2C/SPI) or both sides run their own (UART). Everything about drift, stretching and baud error follows from that one choice.']
+    ];
+    var lis = '';
+    items.forEach(function (it) { lis += '<tr><td class="k">' + esc(it[0]) + '</td><td>' + it[1] + '</td></tr>'; });
+    return '<section class="pf-card"><h3>Seven words that cover every serial protocol<span class="pf-sub">the shared vocabulary</span></h3>' +
+      '<table class="pr-bit tbl"><tr><th>term</th><th>what it really means</th></tr>' + lis + '</table>' +
+      '<p class="pf-hint">Datasheets vary, physics does not. When a new protocol shows up (CAN, USB, one of five display interfaces), find these seven answers first and the rest is bookkeeping.</p></section>';
+  }
+  function prMapStage7() {
+    return prCols(
+      prTeach('Protocols are agreements about voltage over time',
+        '<p>Stage 1 was the last lesson that was about electricity. From here everything is about <em>convention</em>: two chips with no shared memory, no shared clock and often no spare pins, agreeing on what a wire means at each instant. UART, I\u00b2C and SPI are not three technologies \u2014 they are three answers to the same seven questions.</p>' +
+        '<p>Once you can name the questions, a new protocol stops being scary: find the idle level, the framing, the sample instant, the bit order, the acknowledgement, the arbitration, the clock domain. This table is the map of the module; every cell links to a stage you can break.</p>') +
+      prMapVocabCard(),
+      prMapTableCard(),
+      prGoalCard(7) + prCodeCard('Choosing, in C', PR_MAP_CODE) + prLogCard());
+  }
+  var PR_MAP_CODE = '/* the three lines you will actually configure in a real project */\n\n/* UART  \u2014 agreed clock, framed bytes, no addressing, no ACK */\nUSART1->BRR = 8000000u / 115200u;   /* both sides must already agree  */\n\n/* I2C   \u2014 shared clock, shared data, addressed, acknowledged */\nI2C1->DR = (0x50u << 1) | 0u;       /* the first byte names a device  */\n\n/* SPI   \u2014 master clock, two data wires, chip-select addressing */\nSPI1->CR1 = SPI_CR1_MSTR | SPI_CR1_SPE;   /* mode lives in CPOL/CPHA  */\nGPIOA->BSRR = CS_PIN;               /* addressing is a wire, not a byte */\n\n/* None of these is "faster" in the abstract. Pick by pins available,\n   devices on the bus, distance, and how much you trust the wiring. */';
+
   /* ---- goals ---- */
+
   var PR_GOALS = {
     1: { text: 'Set the driver to <b>open-drain</b>, release the pin (ODR = 1), and add a <b>pull-up</b>. The line must read <b>HIGH</b> — proving a "1" on an open-drain pin really means "let go and let the resistor decide".',
       ok: function () { var s = protos.sig; return prResolve(s.drive, s.out, s.pull) === 'high' && s.drive === 'od'; },
@@ -4594,7 +5196,26 @@ arm-none-eabi-objcopy -O binary \
       hint: function () { return 'The error accumulates, so the bits nearest the stop break first. Push the slider further — a big mismatch is fine here.'; } },
     4: { text: 'Type a short message and receive it: get <b>3 or more characters</b> through the terminal.',
       ok: function () { return protos.rxLog.length >= 3; },
-      hint: function () { return 'Type into the box and press Enter — each character is a full frame.'; } }
+      hint: function () { return 'Type into the box and press Enter — each character is a full frame.'; } },
+    5: { text: 'Make an arbitration decision visible: send two different master addresses and let the log record a <b>loser</b> dropping off mid-byte. (Identical addresses do not count — that is a bug you get for free, not a feature.)',
+      ok: function () { return protos.i2c.collisions >= 1; },
+      hint: function () { return 'The two addresses must differ at some bit — try the 0x50 vs 0x40 preset and press send.'; } },
+    6: { text: 'Address someone who is home: send the address of the <b>present EEPROM (0x50)</b> and get its <b>ACK</b> — then optionally see a NACK from an empty slot and a full repeated-start read.',
+      ok: function () { return protos.i2c.acked >= 1; },
+      hint: function () { return 'Type 50 in the address box (or click the EEPROM preset) and press Send START + address.'; } },
+    7: { text: 'Use the map as a menu: visit at least one stage from <b>each</b> family \u2014 UART, I\u00b2C and SPI \u2014 by following any of the links in the table.',
+      ok: function () {
+        var s = protos.seen;
+        function any(ids) { for (var i = 0; i < ids.length; i++) { if (s[ids[i]]) { return true; } } return false; }
+        return any([2, 3, 4]) && any([5, 6]) && any([8, 9]);
+      },
+      hint: function () { return 'Every cell in the table is a button \u2014 click one link per protocol column and this clears.'; } },
+    8: { text: 'Prove the mode rule from both sides: clock a byte out with the master and slave in <b>different</b> modes and watch the byte arrive shifted, then set them equal and take a clean read.',
+      ok: function () { var u = protos.spi; return u.mismatches >= 1 && u.okReads >= 1; },
+      hint: function () { return 'Try the \u201cCPOL only\u201d preset, press Clock it out, then match the two selectors and send again.'; } },
+    9: { text: 'Meet the one-behind effect and beat it: exchange once so the master latches the <b>stale</b> value, then exchange a <b>dummy 0x00</b> and receive the measurement that was waiting.',
+      ok: function () { return protos.spi.freshRead === true; },
+      hint: function () { return 'Press Exchange (you get 0xCA, the old queued value), then press Dummy read \u2014 the fresh value can only leave on a clock you provide.'; } }
   };
   function prGoalCard(n) {
     var g = PR_GOALS[n]; if (!g) { return ''; }
@@ -4606,6 +5227,11 @@ arm-none-eabi-objcopy -O binary \
 
   /* ---- stage bodies + shell ---- */
   function prStageBody(n) {
+    if (n === 5) { return prI2cStage5(); }
+    if (n === 6) { return prI2cStage6(); }
+    if (n === 7) { return prMapStage7(); }
+    if (n === 8) { return prSpiStage8(); }
+    if (n === 9) { return prSpiStage9(); }
     if (n === 1) { return prCols(
       prTeach('A voltage is not a logic level',
         '<p>A pin is a small circuit fighting a wire. Two transistors can <b>actively drive</b> it — one to VDD (push), one to GND (pull) — that is <b>push-pull</b>: defined both ways. Or the pin has only the lower transistor, <b>open-drain</b>: it can sink the line low or <em>let go</em>, never force it high. A <b>pull-up</b> resistor then holds the released line high; a <b>pull-down</b> holds it low.</p>' +
@@ -4628,20 +5254,32 @@ arm-none-eabi-objcopy -O binary \
         '<p>Every key is a byte; every byte is a frame; the receiver reassembles by timing. A serial terminal does nothing more than read what the decoder produced and print it. Change the <b>baud error</b> (carried from stage 3) and watch good characters turn to garbage — the exact corruption a logic analyser shows you when a clock tree is misconfigured.</p>') + prTermCtlCard() + prTermCard(),
       prGoalCard(4) + prCodeCard('USART1 init @ ' + protos.uart.baud + ' baud', prUartCode()));
   }
+  function prFamNav() {
+    var cur = prFamOfStage(protos.stage);
+    return '<div class="pr-fams" role="tablist" aria-label="Protocol families">' +
+      PR_FAMILIES.map(function (f) {
+        var stages = prStagesInFam(f.id), dots = '';
+        stages.forEach(function (s) { dots += '<i' + (protos.goals[s.id] ? ' class="gd"' : '') + '></i>'; });
+        return '<button type="button" role="tab" data-prfam="' + f.id + '" aria-selected="' + String(f.id === cur) + '" class="pr-fam' + (f.id === cur ? ' cur' : '') + '" title="' + esc(f.blurb) + '">' +
+          esc(f.name) + '<span class="fc">' + dots + '</span></button>';
+      }).join('') + '</div>';
+  }
   function prStageNav() {
+    var fam = prFamOfStage(protos.stage);
     return '<nav class="pf-stagenav" role="tablist" aria-label="Protocol stages">' +
-      PR_STAGE_META.map(function (s) {
+      prStagesInFam(fam).map(function (s) {
         return '<button type="button" role="tab" data-prstage="' + s.id + '" aria-selected="' + String(protos.stage === s.id) + '" title="' + esc(s.tag) + '">' +
           (protos.goals[s.id] ? '<span class="gd">✓</span>' : '<span class="num">' + s.id + '</span>') + '<span class="stn">' + esc(s.name) + '</span></button>';
       }).join('') + '</nav>';
   }
   function prBody() {
     var meta = prStageById(protos.stage) || PR_STAGE_META[0];
-    return prStageNav() +
+    var famMeta = prFamById(meta.fam);
+    return prFamNav() + prStageNav() +
       '<div class="pf-runbar">' +
         '<button type="button" class="btn" id="pr-pause" aria-pressed="' + String(!protos.running) + '">' + (protos.running ? '⏸ Pause' : '⏵ Resume') + '</button>' +
         '<button type="button" class="btn" id="pr-reset">↺ Reset lab</button>' +
-        '<span class="pf-stage-tag">' + esc(meta.tag) + '</span>' +
+        '<span class="pf-stage-tag">' + esc(famMeta.name + ' \u00b7 ' + meta.tag) + '</span>' +
         '<span class="pf-simclock">sim t = <b id="pr-simclock">' + protos.simMs + '</b> ms</span>' +
       '</div>' + prStageBody(protos.stage);
   }
@@ -4652,6 +5290,8 @@ arm-none-eabi-objcopy -O binary \
     prWire(host);
     /* keep send buttons inert while a frame owns the wire */
     if (protos.uart.tx) { var sb = document.getElementById('pr-send') || document.getElementById('pr-send3'); if (sb) { sb.disabled = true; } }
+    if (protos.i2c.tx) { var s5 = document.getElementById('pr-i2c-send') || document.getElementById('pr-i2c-send6'); if (s5) { s5.disabled = true; } }
+    if (protos.spi.tx) { var s8 = document.getElementById('pr-spi-send') || document.getElementById('pr-spi-xfer'); if (s8) { s8.disabled = true; } }
     prRenderLive();
   }
   function prRenderLive() {
@@ -4671,6 +5311,48 @@ arm-none-eabi-objcopy -O binary \
       }
     }
     var fr = document.getElementById('pr-frame-read'); if (fr) { fr.innerHTML = prFrameReadHtml(); }
+    /* I2C playhead + live readouts */
+    if (_prPlay && _prPlay.id === 'pr-i2c-play') {
+      var ip = document.getElementById('pr-i2c-play');
+      if (ip) {
+        var ia = prI2cLive();
+        if (ia) {
+          var ix = Math.max(0, Math.min(ia.pos, _prPlay.n));
+          var ipx = _prPlay.left + ix * _prPlay.cw;
+          ip.setAttribute('x1', ipx.toFixed(1)); ip.setAttribute('x2', ipx.toFixed(1));
+          ip.setAttribute('opacity', '1');
+        } else { ip.setAttribute('opacity', '0'); }
+      }
+    }
+    if (protos.stage === 5 || protos.stage === 6) {
+      var ir = document.getElementById('pr-i2c-read');
+      if (ir) {
+        var st6 = protos.i2c, rs = st6.result && ((protos.stage === 5) === (st6.result.kind === 'masters')) ? st6.result : null;
+        var sl = rs ? rs.slots : null;
+        if (!sl && _prAnim && _prAnim.tx) { sl = _prAnim.tx.slots; }
+        ir.innerHTML = protos.stage === 5 ? prI2cBanner(sl || prI2cMasters(st6.m1val, st6.m2val).slots, rs) : prI2cAddrBanner(sl || prI2cTxSlots(st6.addr, st6.rw, st6.addr === PR_I2C_SLAVE, false), rs);
+      }
+      var itb = document.getElementById('pr-i2c-table'); if (itb) { itb.outerHTML = prI2cTableCard(); }
+    }
+    /* SPI playhead + live readouts */
+    if (protos.stage === 8 || protos.stage === 9) {
+      var sa = prSpiLive();
+      if (_prSpiPlay) {
+        var sp = document.getElementById(_prSpiPlay.id);
+        if (sp) {
+          if (sa) {
+            var unit = protos.stage === 9 ? 2 : 1;                 /* ring anim counts clocks, mode anim counts half-steps */
+            var sx = _prSpiPlay.left + Math.max(0, Math.min(sa.pos * unit, 16)) * _prSpiPlay.cw;
+            sp.setAttribute('x1', sx.toFixed(1)); sp.setAttribute('x2', sx.toFixed(1));
+            sp.setAttribute('opacity', '1');
+          } else { sp.setAttribute('opacity', '0'); }
+        }
+      }
+      var sr = document.getElementById('pr-spi-read'); if (sr) { sr.innerHTML = prSpiReadHtml(); }
+      if (protos.stage === 9) {
+        var rg = document.getElementById('pr-spi-ring'); if (rg) { rg.outerHTML = prSpiRingCard(); }
+      }
+    }
   }
 
   function prFinishFrame(tx) {
@@ -4688,6 +5370,8 @@ arm-none-eabi-objcopy -O binary \
     var u = protos.uart;
     if (protos.running) {
       protos.simMs += PR_TICK_MS;
+      if (prI2cTick()) { prRenderLive(); return; }
+      if (prSpiTick()) { prRenderLive(); return; }
       if (!u.tx && u.queue && u.queue.length) {
         var c = u.queue.shift();
         u.char = c;
@@ -4712,7 +5396,9 @@ arm-none-eabi-objcopy -O binary \
   function prStartTicker() { if (prTicker) { return; } prTicker = setInterval(prTick, PR_TICK_MS); }
 
   function prGoStage(n) {
-    if (n < 1 || n > PR_STAGE_META.length || n === protos.stage) { return; }
+    if (!prStageById(n) || n === protos.stage) { return; }
+    prAnimStop();
+    protos.seen[n] = true;
     protos.stage = n; prSave(); prRenderStatic();
   }
 
@@ -4723,7 +5409,7 @@ arm-none-eabi-objcopy -O binary \
     var pz = document.getElementById('pr-pause');
     if (pz) { pz.addEventListener('click', function () { protos.running = !protos.running; prSave(); prRenderStatic(); }); }
     var rs = document.getElementById('pr-reset');
-    if (rs) { rs.addEventListener('click', function () { var keep = protos.stage; protos = prDefaults(); protos.stage = keep; prSeedLog(); prSave(); prRenderStatic(); }); }
+    if (rs) { rs.addEventListener('click', function () { var keep = protos.stage; prAnimStop(); protos = prDefaults(); protos.stage = keep; prSeedLog(); prSave(); prRenderStatic(); }); }
 
     /* stage 1: line physics */
     Array.prototype.forEach.call(host.querySelectorAll('[data-sigdrive]'), function (b) {
@@ -4791,6 +5477,166 @@ arm-none-eabi-objcopy -O binary \
     }
     var cl = document.getElementById('pr-clear');
     if (cl) { cl.addEventListener('click', function () { protos.rxLog = []; prSave(); prRenderStatic(); }); }
+
+    /* stage 5: I2C arbitration */
+    var m1i = document.getElementById('pr-i2c-m1');
+    if (m1i) {
+      m1i.addEventListener('input', function () {
+        var v = parseInt(m1i.value, 16);
+        protos.i2c.m1val = isNaN(v) ? 0 : (v & 0x7f);
+        protos.i2c.result = null;
+        prSave(); prRenderStatic();
+      });
+    }
+    var m2i = document.getElementById('pr-i2c-m2');
+    if (m2i) {
+      m2i.addEventListener('input', function () {
+        var v = parseInt(m2i.value, 16);
+        protos.i2c.m2val = isNaN(v) ? 0 : (v & 0x7f);
+        protos.i2c.result = null;
+        prSave(); prRenderStatic();
+      });
+    }
+    Array.prototype.forEach.call(host.querySelectorAll('[data-i2cpair]'), function (b) {
+      b.addEventListener('click', function () {
+        var p = b.dataset.i2cpair.split(',');
+        protos.i2c.m1val = parseInt(p[0], 16) & 0x7f; protos.i2c.m2val = parseInt(p[1], 16) & 0x7f;
+        protos.i2c.result = null; prSave(); prRenderStatic();
+      });
+    });
+    var i2cSend = document.getElementById('pr-i2c-send');
+    if (i2cSend) {
+      i2cSend.addEventListener('click', function () {
+        var u = protos.i2c; if (u.tx) { return; }
+        var r = prI2cMasters(u.m1val, u.m2val);
+        u.tx = { kind: 'masters', slots: r.slots, lostAt: r.lostAt };
+        if (!protos.running) { protos.running = true; }
+        prSave(); prRenderStatic();
+      });
+    }
+    Array.prototype.forEach.call(host.querySelectorAll('[data-i2ca]'), function (b) {
+      b.addEventListener('click', function () { protos.i2c.aOut = Number(b.dataset.i2ca) ? 1 : 0; prSave(); prRenderStatic(); });
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('[data-i2cb]'), function (b) {
+      b.addEventListener('click', function () { protos.i2c.bOut = Number(b.dataset.i2cb) ? 1 : 0; prSave(); prRenderStatic(); });
+    });
+
+    /* stage 6: I2C addressing */
+    var addrIn = document.getElementById('pr-i2c-addr');
+    if (addrIn) {
+      addrIn.addEventListener('input', function () {
+        var v = parseInt(addrIn.value, 16);
+        protos.i2c.addr = isNaN(v) ? 0 : (v & 0x7f);
+        protos.i2c.result = null; prSave(); prRenderStatic();
+      });
+    }
+    Array.prototype.forEach.call(host.querySelectorAll('[data-i2crw]'), function (b) {
+      b.addEventListener('click', function () { protos.i2c.rw = Number(b.dataset.i2crw) ? 1 : 0; prSave(); prRenderStatic(); });
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('[data-i2caddr]'), function (b) {
+      b.addEventListener('click', function () { protos.i2c.addr = parseInt(b.dataset.i2caddr, 16) & 0x7f; protos.i2c.result = null; prSave(); prRenderStatic(); });
+    });
+    var i2cSend6 = document.getElementById('pr-i2c-send6');
+    if (i2cSend6) {
+      i2cSend6.addEventListener('click', function () {
+        var u = protos.i2c; if (u.tx) { return; }
+        u.tx = { kind: 'addr', slots: prI2cTxSlots(u.addr, u.rw, u.addr === PR_I2C_SLAVE, false), addr: u.addr, rw: u.rw, sr: false };
+        if (!protos.running) { protos.running = true; }
+        prSave(); prRenderStatic();
+      });
+    }
+    var i2cSr = document.getElementById('pr-i2c-sr');
+    if (i2cSr) {
+      i2cSr.addEventListener('click', function () {
+        var u = protos.i2c; if (u.tx) { return; }
+        u.tx = { kind: 'addr', slots: prI2cSrSlots(u.addr, u.addr === PR_I2C_SLAVE), addr: u.addr, rw: 1, sr: true };
+        if (!protos.running) { protos.running = true; }
+        prSave(); prRenderStatic();
+      });
+    }
+
+    /* family tier */
+    Array.prototype.forEach.call(host.querySelectorAll('[data-prfam]'), function (b) {
+      b.addEventListener('click', function () {
+        var first = prStagesInFam(b.dataset.prfam)[0];
+        if (first) { prGoStage(first.id); }
+      });
+    });
+
+    /* stage 8: SPI modes */
+    Array.prototype.forEach.call(host.querySelectorAll('[data-spimm]'), function (b) {
+      b.addEventListener('click', function () { protos.spi.mMode = Number(b.dataset.spimm) & 3; protos.spi.result = null; prSave(); prRenderStatic(); });
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('[data-spism]'), function (b) {
+      b.addEventListener('click', function () { protos.spi.sMode = Number(b.dataset.spism) & 3; protos.spi.result = null; prSave(); prRenderStatic(); });
+    });
+    Array.prototype.forEach.call(host.querySelectorAll('[data-spipair]'), function (b) {
+      b.addEventListener('click', function () {
+        var p = b.dataset.spipair.split(',');
+        protos.spi.mMode = Number(p[0]) & 3; protos.spi.sMode = Number(p[1]) & 3;
+        protos.spi.result = null; prSave(); prRenderStatic();
+      });
+    });
+    var spByte = document.getElementById('pr-spi-byte');
+    if (spByte) {
+      spByte.addEventListener('input', function () {
+        var v = parseInt(spByte.value, 16);
+        protos.spi.byte = isNaN(v) ? 0 : (v & 0xff);
+        protos.spi.result = null; prSave();
+        /* update only the trace so the caret keeps its place while typing */
+        var wc = document.getElementById('pr-spi-wavecard'); if (wc) { wc.outerHTML = prSpiWaveCard(); }
+      });
+    }
+    var spSend = document.getElementById('pr-spi-send');
+    if (spSend) {
+      spSend.addEventListener('click', function () {
+        var u = protos.spi; if (u.tx) { return; }
+        u.tx = { kind: 'modes', m: u.mMode, s: u.sMode, out: u.byte };
+        if (!protos.running) { protos.running = true; }
+        prSave(); prRenderStatic();
+      });
+    }
+
+    /* stage 9: the shift ring */
+    var xrByte = document.getElementById('pr-spi-xbyte');
+    if (xrByte) {
+      xrByte.addEventListener('input', function () {
+        var v = parseInt(xrByte.value, 16);
+        protos.spi.byte = isNaN(v) ? 0 : (v & 0xff);
+        protos.spi.result = null; prSave();
+        var rg2 = document.getElementById('pr-spi-ring'); if (rg2) { rg2.outerHTML = prSpiRingCard(); }
+        var xw = document.getElementById('pr-spi-xwave'); if (xw) { xw.outerHTML = '<section class="pf-card" id="pr-spi-xwave"><h3>Logic analyser<span class="pf-sub">three lanes: clock, out, in</span></h3>' + prSpiRingWave() + '</section>'; }
+        var xr2 = document.getElementById('pr-spi-xread'); if (xr2) { xr2.innerHTML = prSpiXferReadHtml(); }
+      });
+    }
+    var xrGo = document.getElementById('pr-spi-xfer');
+    if (xrGo) {
+      xrGo.addEventListener('click', function () {
+        var u = protos.spi; if (u.tx) { return; }
+        u.tx = { kind: 'ring', out: u.byte, slaveBefore: u.slaveShift };
+        if (!protos.running) { protos.running = true; }
+        prSave(); prRenderStatic();
+      });
+    }
+    var xrDummy = host.querySelector('[data-spidummy]');
+    if (xrDummy) {
+      xrDummy.addEventListener('click', function () {
+        var u = protos.spi; if (u.tx) { return; }
+        u.byte = 0x00;
+        u.tx = { kind: 'ring', out: 0x00, slaveBefore: u.slaveShift };
+        if (!protos.running) { protos.running = true; }
+        prSave(); prRenderStatic();
+      });
+    }
+    var xrNew = host.querySelector('[data-spinew]');
+    if (xrNew) {
+      xrNew.addEventListener('click', function () {
+        var u = protos.spi;
+        u.slavePar = 0x20 + Math.floor(Math.random() * 0xdf);
+        prLog('note', 'sensor finished a conversion: ' + prHex(u.slavePar) + ' is ready, but the shift ring still holds ' + prHex(u.slaveShift));
+        prSave(); prRenderStatic();
+      });
+    }
 
     /* goal verify */
     Array.prototype.forEach.call(host.querySelectorAll('[data-prgoal]'), function (b) {

@@ -58,16 +58,23 @@ Navigation is grouped into three clusters in the top bar.
   (DIER × ISER × PRIMASK), priority nesting with a swim-lane timeline, the read-modify-write
   race, and a graded bring-up challenge. A "Your code" panel reverse-engineers every click
   into the canonical C statement (e.g. `RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;`).
-- **Protocols** *(newest)* — starts at line physics and climbs to UART, all on a shared
-  logic-analyser instrument:
-  - **Signals 101** — push-pull vs open-drain vs input × pull-up/pull-down resolving to a
-    real level, including the dreaded **floating** line, plus a **wired-AND** bus rig (the
-    seed of a future I²C lesson).
-  - **The frame** — watch a byte become `[Start][D0..D7 LSB-first][Parity?][Stop]` travel
-    the TX wire.
-  - **Sampling & baud** — a baud-error slider drifts the receiver's sample points until
-    they cross a bit boundary and garble the byte.
-  - **Terminal** — type characters, each framed and decoded back, with a live `BRR` readout.
+- **Protocols** *(newest)* — grouped into families (**Basics / UART / I²C / SPI**) with a
+  stage tab under each, all built on one shared logic-analyser instrument:
+  - **Basics · Signals 101** — push-pull vs open-drain vs input × pull-up/pull-down resolving
+    to a real level, including the dreaded **floating** line, plus a **wired-AND** bus rig —
+    the physics every protocol is built on.
+  - **Basics · Protocol map** — the seven questions every serial protocol answers (idle
+    level, framing, sample instant, bit order, addressing, acknowledgement, clock domain),
+    with each comparison cell linking to the stage where you can make it fail.
+  - **UART** — a byte becoming `[Start][D0..D7 LSB-first][Parity?][Stop]` on the TX wire; a
+    baud-error slider that drifts the receiver's sample points until they cross a bit
+    boundary; a terminal that frames what you type, with a live `BRR` readout.
+  - **I²C** — two masters fighting a wired-AND (the loser drops out mid-byte and you watch
+    it happen), then addressing: `0x50 << 1 | R/W`, ACK on the 9th clock, NACK from an empty
+    slot, and a repeated-start register read.
+  - **SPI** — CPOL/CPHA as one 2-bit number: mismatch the modes and the byte arrives shifted
+    by one window; then the shift ring, where a read is always one transaction behind and
+    every driver has to write a byte it does not care about.
 
 ### Practice
 - **Interview prep** (25 questions across tracks/levels/formats, rubrics, timed mock
@@ -136,7 +143,6 @@ src/index.html      generated single-file app served by Tauri (do not hand-edit)
 src-tauri/          Rust backend + Tauri config (window, capabilities, bundling,
                     toolchain-detection and compile pipeline IPC commands)
 roadmap-source/     the real source: HTML/JS fragments, build.js, validate_build.js
-status.txt          detailed engineering status report & backlog
 ```
 
 ## Constraints worth knowing
@@ -150,11 +156,14 @@ status.txt          detailed engineering status report & backlog
 
 ## Future work in progress
 
-The Protocol Lab is the current frontier. Next up, tracked in `status.txt`:
+The Protocol Lab is the current frontier — four families (Basics / UART / I²C / SPI) and
+nine stages are live. Next up:
 
-- **Protocols** — add **SPI** (CPOL/CPHA grid + shift-register model) and **I²C** (built on
-  the wired-AND rig already shipped), then ADC / DMA / CAN / an RTOS view; time-travel
-  scrubbing of the logic-analyser capture.
+- **Protocols** — I²C clock stretching and multi-slave transfers, SPI burst/DMA modes and
+  real device command sequences (a flash read: command, address, dummy, data), then
+  **CAN** (bit stuffing, dominant/recessive on the same wired-AND idea) and one display
+  interface as a case study; an ADC / DMA / RTOS view; time-travel scrubbing of the
+  logic-analyser capture.
 - **Volatile "break-it" demo** — compile the same polling loop `-O0` vs `-O2` in the bench
   and show the cached-in-register disassembly from the real compiler.
 - **Event-stream grading** — challenge the labs on observed behaviour ("PA5 toggled at
@@ -165,4 +174,4 @@ The Protocol Lab is the current frontier. Next up, tracked in `status.txt`:
 
 ---
 
-*Version 1.x — see `status.txt` for the full feature inventory and engineering notes.*
+*Version 1.x — see `roadmap-source/README.md` for the fragment build notes.*
