@@ -823,6 +823,9 @@ svg.graph{display:block;width:100%;height:auto;min-height:660px;user-select:none
 .pr-scrubpos b{color:var(--accent)}
 .pr-revt{display:inline-block;padding:0 5px;border:1px solid var(--accent);border-radius:2px;color:var(--accent);font:600 9px var(--mono);text-transform:uppercase;letter-spacing:.06em}
 table.pr-bit tr.cur td{background:color-mix(in oklab, var(--accent) 14%, var(--surface))}
+/* protocol lab: keyboard cheatsheet */
+kbd{display:inline-block;min-width:20px;padding:1px 5px;border:1px solid var(--rule);border-bottom-width:2px;border-radius:3px;background:var(--surface-2);color:var(--ink);font:600 10px var(--mono);text-align:center}
+table.pr-bit tr.dim td{opacity:.45}
 .pf-grid{display:grid;grid-template-columns:minmax(320px,1fr) minmax(400px,1.35fr) minmax(280px,1fr);gap:14px;align-items:start}
 @media(max-width:1180px){.pf-grid{grid-template-columns:1fr 1fr}.pf-col-obs{grid-column:1/-1}}
 @media(max-width:760px){.pf-grid{grid-template-columns:1fr}}
@@ -1315,7 +1318,7 @@ table.pr-bit td.bad{color:var(--warn)}
     <h2>How bits actually travel a wire</h2>
     <p>Registers decide a voltage; protocols are what a second device <em>infers</em> from that voltage over time. The module is grouped the way the hardware is: <strong>Basics</strong> (line physics, and the seven questions every serial protocol answers), then <strong>UART</strong>, <strong>I&sup2;C</strong> and <strong>SPI</strong> &mdash; each a set of graded stages on the same logic-analyser instrument. Everything is a live model, exactly like the Peripherals tab: watch the signal, read the code it equals, break it on purpose.</p>
   </div>
-  <div id="prolab-body"></div>
+  <div id="prolab-body" role="tabpanel" aria-label="Protocol lab stage"></div>
 </div></div>
 
 <div class="view" id="view-practice" hidden><div class="wrap">
@@ -10697,8 +10700,105 @@ arm-none-eabi-objcopy -O binary \
       '</span>';
   }
 
+  /* ---- keyboard: one table feeds the handler and the cheatsheet ---- */
+  var PR_KEY_SEND = ['pr-send', 'pr-send3', 'pr-i2c-send', 'pr-i2c-send6', 'pr-spi-send', 'pr-spi-xfer'];
+  var _prKeys = false;
+  function prKeysOpen() { return _prKeys; }
+  function prKeyLabel(k) {
+    var names = { ' ': 'space', ArrowLeft: '\u2190', ArrowRight: '\u2192', ArrowUp: '\u2191', ArrowDown: '\u2193', Escape: 'esc' };
+    return names[k] || k;
+  }
+  function prPress(id) {
+    var b = document.getElementById(id);
+    if (!b || b.disabled) { return false; }
+    b.click();
+    return true;
+  }
+  function prSendKey() { for (var i = 0; i < PR_KEY_SEND.length; i++) { if (prPress(PR_KEY_SEND[i])) { return; } } }
+  function prStageSlot() {
+    var list = prStagesInFam(prFamOfStage(protos.stage)), i;
+    for (i = 0; i < list.length; i++) { if (list[i].id === protos.stage) { return i; } }
+    return 0;
+  }
+  function prStageStep(d) {
+    var list = prStagesInFam(prFamOfStage(protos.stage)), i = prStageSlot() + d;
+    if (i < 0 || i >= list.length) { return; }
+    prGoStage(list[i].id); prFocusTab(list[i].id);
+  }
+  function prFamStep(d) {
+    var fam = prFamOfStage(protos.stage), i;
+    for (i = 0; i < PR_FAMILIES.length; i++) { if (PR_FAMILIES[i].id === fam) { break; } }
+    var next = PR_FAMILIES[i + d]; if (!next) { return; }
+    var first = prStagesInFam(next.id)[0]; if (!first) { return; }
+    prGoStage(first.id); prFocusTab(first.id);
+  }
+  function prScrubStep(d) { if (!prCap()) { return; } prSetPos(prScrubPos() + d); }
+  /* the runbar buttons and the keyboard share these, so neither can drift */
+  function prToggleRun() { protos.running = !protos.running; prSave(); prRenderStatic(); }
+  function prResetLab() {
+    var keep = protos.stage;
+    prAnimStop();
+    protos = prDefaults(); protos.stage = keep;
+    prSeedLog(); prSave(); prRenderStatic();
+  }
+  function prToggleKeys(on) {
+    _prKeys = on === undefined ? !_prKeys : !!on;
+    prRenderStatic();
+    /* the runbar was rebuilt, so hand focus back to the button that opens this */
+    var t = document.getElementById('pr-keys-btn'); if (t) { t.focus(); }
+  }
+  var PR_KEYMAP = [
+    { key: 'ArrowLeft', label: 'previous stage in this family', run: function () { prStageStep(-1); } },
+    { key: 'ArrowRight', label: 'next stage in this family', run: function () { prStageStep(1); } },
+    { key: 'ArrowUp', label: 'previous protocol family', run: function () { prFamStep(-1); } },
+    { key: 'ArrowDown', label: 'next protocol family', run: function () { prFamStep(1); } },
+    { key: ' ', label: 'run / pause the simulation', run: prToggleRun },
+    { key: 's', label: 'send, on whatever this stage sends', run: prSendKey },
+    { key: 'r', label: 'reset the lab', run: prResetLab },
+    { key: ',', label: 'step the captured trace back one bit / clock', when: prCap, run: function () { prScrubStep(-1); } },
+    { key: '.', label: 'step the captured trace forward one', when: prCap, run: function () { prScrubStep(1); } },
+    { key: '?', label: 'show or hide this list', run: function () { prToggleKeys(); } },
+    { key: 'Escape', label: 'hide this list', when: prKeysOpen, run: function () { prToggleKeys(false); } }
+  ];
+  /* typing anywhere wins over a shortcut: the terminal, the hex boxes, the sliders */
+  function prKeyTyping(t) {
+    if (!t || !t.tagName) { return false; }
+    var tag = t.tagName.toUpperCase();
+    if (tag === 'TEXTAREA' || tag === 'SELECT') { return true; }
+    if (t.isContentEditable) { return true; }
+    return tag === 'INPUT' && t.type !== 'range';
+  }
+  function prKeyOnRange(t) {
+    return !!t && !!t.tagName && t.tagName.toUpperCase() === 'INPUT' && t.type === 'range';
+  }
+  function prKeysHandle(e) {
+    if (currentView !== 'protocols' || e.ctrlKey || e.metaKey || e.altKey) { return; }
+    if (prKeyTyping(e.target)) { return; }
+    /* arrows belong to the slider you are standing on, not to stage navigation */
+    if (prKeyOnRange(e.target) && /^Arrow|^Home$|^End$/.test(e.key)) { return; }
+    for (var i = 0; i < PR_KEYMAP.length; i++) {
+      var k = PR_KEYMAP[i];
+      if (k.key !== e.key) { continue; }
+      if (k.when && !k.when()) { continue; }
+      e.preventDefault();
+      k.run(e);
+      return;
+    }
+  }
+  function prKeysBtn() {
+    return '<button type="button" class="btn mini" id="pr-keys-btn" aria-expanded="' + String(_prKeys) + '" aria-controls="pr-keys" title="keyboard shortcuts ( ? )">? keys</button>';
+  }
+  function prKeysCard() {
+    var rows = PR_KEYMAP.map(function (k) {
+      var off = k.when && !k.when();
+      return '<tr' + (off ? ' class="dim"' : '') + '><td class="k"><kbd>' + esc(prKeyLabel(k.key)) + '</kbd></td><td>' + esc(k.label) + (off ? ' \u00b7 after a transfer has finished' : '') + '</td></tr>';
+    }).join('');
+    return '<section class="pf-card" id="pr-keys"><h3>Keyboard<span class="pf-sub">the whole lab is drivable without a mouse</span></h3>' +
+      '<table class="pr-bit tbl"><tr><th>key</th><th>what it does</th></tr>' + rows + '</table>' +
+      '<p class="pf-hint">Shortcuts are off everywhere else in the app, and inert while you are typing in a field \u2014 the terminal still takes spaces, the hex boxes still take arrows. Sliders keep their own arrow keys too: stand on the trace slider and <b>\u2190 \u2192</b> walks the capture instead of changing stage.</p></section>';
+  }
+
   /* ---- what the scrubber is for: what a receiver had decided by step k ---- */
-  function prBin8(v) { var s = '', b; for (b = 7; b >= 0; b--) { s += ((v >>> b) & 1) ? '1' : '0'; } return s; }
   function prScrubUartHtml(tx, k) {
     var u = protos.uart, smp = prRxSamples(tx.bits, tx.drift), i, mis = 0;
     for (i = 0; i < smp.length && i < k; i++) { if (smp[i].bad) { mis++; } }
@@ -11191,7 +11291,7 @@ arm-none-eabi-objcopy -O binary \
       PR_FAMILIES.map(function (f) {
         var stages = prStagesInFam(f.id), dots = '';
         stages.forEach(function (s) { dots += '<i' + (protos.goals[s.id] ? ' class="gd"' : '') + '></i>'; });
-        return '<button type="button" role="tab" data-prfam="' + f.id + '" aria-selected="' + String(f.id === cur) + '" class="pr-fam' + (f.id === cur ? ' cur' : '') + '" title="' + esc(f.blurb) + '">' +
+        return '<button type="button" role="tab" id="pr-fam-' + f.id + '" data-prfam="' + f.id + '" aria-controls="prolab-body" tabindex="' + (f.id === cur ? '0' : '-1') + '" aria-selected="' + String(f.id === cur) + '" class="pr-fam' + (f.id === cur ? ' cur' : '') + '" title="' + esc(f.blurb) + '">' +
           esc(f.name) + '<span class="fc">' + dots + '</span></button>';
       }).join('') + '</div>';
   }
@@ -11199,9 +11299,14 @@ arm-none-eabi-objcopy -O binary \
     var fam = prFamOfStage(protos.stage);
     return '<nav class="pf-stagenav" role="tablist" aria-label="Protocol stages">' +
       prStagesInFam(fam).map(function (s) {
-        return '<button type="button" role="tab" data-prstage="' + s.id + '" aria-selected="' + String(protos.stage === s.id) + '" title="' + esc(s.tag) + '">' +
+        return '<button type="button" role="tab" id="pr-stage-' + s.id + '" data-prstage="' + s.id + '" aria-controls="prolab-body" tabindex="' + (protos.stage === s.id ? '0' : '-1') + '" aria-selected="' + String(protos.stage === s.id) + '" title="' + esc(s.tag) + '">' +
           (protos.goals[s.id] ? '<span class="gd">✓</span>' : '<span class="num">' + s.id + '</span>') + '<span class="stn">' + esc(s.name) + '</span></button>';
       }).join('') + '</nav>';
+  }
+  /* a shortcut that moved you has to move the caret too, or the tab order loses you */
+  function prFocusTab(n) {
+    var t = document.getElementById('pr-stage-' + n);
+    if (t) { t.focus(); }
   }
   function prBody() {
     var meta = prStageById(protos.stage) || PR_STAGE_META[0];
@@ -11211,9 +11316,10 @@ arm-none-eabi-objcopy -O binary \
         '<button type="button" class="btn" id="pr-pause" aria-pressed="' + String(!protos.running) + '">' + (protos.running ? '⏸ Pause' : '⏵ Resume') + '</button>' +
         '<button type="button" class="btn" id="pr-reset">\u21ba Reset lab</button>' +
         prScrubBar() +
+        prKeysBtn() +
         '<span class="pf-stage-tag">' + esc(famMeta.name + ' \u00b7 ' + meta.tag) + '</span>' +
         '<span class="pf-simclock">sim t = <b id="pr-simclock">' + protos.simMs + '</b> ms</span>' +
-      '</div>' + prStageBody(protos.stage);
+      '</div>' + (_prKeys ? prKeysCard() : '') + prStageBody(protos.stage);
   }
 
   function prRenderStatic() {
@@ -11344,9 +11450,9 @@ arm-none-eabi-objcopy -O binary \
       b.addEventListener('click', function () { prGoStage(Number(b.dataset.prstage)); });
     });
     var pz = document.getElementById('pr-pause');
-    if (pz) { pz.addEventListener('click', function () { protos.running = !protos.running; prSave(); prRenderStatic(); }); }
+    if (pz) { pz.addEventListener('click', prToggleRun); }
     var rs = document.getElementById('pr-reset');
-    if (rs) { rs.addEventListener('click', function () { var keep = protos.stage; prAnimStop(); protos = prDefaults(); protos.stage = keep; prSeedLog(); prSave(); prRenderStatic(); }); }
+    if (rs) { rs.addEventListener('click', prResetLab); }
 
     /* scrubber: walk the transfer that just finished, one clock or bit at a time */
     var smb = document.getElementById('pr-scrub');
@@ -11359,6 +11465,8 @@ arm-none-eabi-objcopy -O binary \
     if (slv) { slv.addEventListener('click', prStopScrub); }
     var spd = document.getElementById('pr-speed');
     if (spd) { spd.addEventListener('click', function () { prSpeedStep(); prSave(); prRenderStatic(); }); }
+    var kb = document.getElementById('pr-keys-btn');
+    if (kb) { kb.addEventListener('click', function () { prToggleKeys(); }); }
 
     /* stage 1: line physics */
     Array.prototype.forEach.call(host.querySelectorAll('[data-sigdrive]'), function (b) {
@@ -11606,6 +11714,7 @@ arm-none-eabi-objcopy -O binary \
     prSeedLog();
     prRenderStatic();
     prStartTicker();
+    document.addEventListener('keydown', prKeysHandle);
     protocolsInited = true;
   }
 
