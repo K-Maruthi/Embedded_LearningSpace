@@ -5886,8 +5886,20 @@ var TOPIC_BY_ID = {};
     }
   }
 
-  /* ---------------- global data backup ---------------- */
-  var DATA_SCHEMA = 1;
+  /* ---------------- global data backup ----------------
+     The roadmap state is held in memory (done / notes / marks / ...) so it is copied
+     out of the variables. The labs hold theirs only in localStorage and read it when
+     they are first opened, so they are copied out of the keys. Schema 2 adds them;
+     schema 1 files simply have no "labs" section and restore the roadmap only. */
+  var DATA_SCHEMA = 2;
+  /* Each key is declared with var inside its own lab module further down this file,
+     so the list is built when called, not when this line runs. */
+  function labKeys() { return [K_BENCH, K_LKSAND, K_PERIPH, K_PROTOS, K_WALK]; }
+  function labState() {
+    var labs = {};
+    labKeys().forEach(function (k) { var v = rd(k, null); if (v !== null) { labs[k] = v; } });
+    return labs;
+  }
   function snapshotAll() {
     return {
       schema: DATA_SCHEMA,
@@ -5899,6 +5911,7 @@ var TOPIC_BY_ID = {};
         marks: JSON.parse(JSON.stringify(marks)),
         interview: JSON.parse(JSON.stringify(ivState)),
         faults: JSON.parse(JSON.stringify(faultState)),
+        labs: labState(),
         settings: { theme: localStorage.getItem(K_THEME) || "" }
       }
     };
@@ -5925,8 +5938,11 @@ var TOPIC_BY_ID = {};
     if (!payload || typeof payload !== "object" || (parsed && parsed.app && parsed.app !== "embedded-c-roadmap")) {
       setDataButtonState("importdata", "Invalid backup"); return false;
     }
-    if (parsed && parsed.schema && Number(parsed.schema) !== DATA_SCHEMA) {
-      setDataButtonState("importdata", "Unsupported backup"); return false;
+    /* Only a newer schema is a problem. Rejecting an older one would throw away a
+       user's backups every time we add a section; ignoring an absent section beats
+       wiping lab progress someone earned after they exported. */
+    if (parsed && parsed.schema && Number(parsed.schema) > DATA_SCHEMA) {
+      setDataButtonState("importdata", "Backup is from a newer version"); return false;
     }
     var nextDone = payload.done && typeof payload.done === "object" ? payload.done : {};
     var nextNotes = payload.notes && typeof payload.notes === "object" ? payload.notes : {};
@@ -5942,6 +5958,18 @@ var TOPIC_BY_ID = {};
     if (!faultState.seen) { faultState.seen = {}; }
     Object.keys(done).forEach(function (k) { if (done[k] === true) { done[k] = 0; } });
     wr(K_DONE, done); wr(K_NOTE, notes); wr(K_MARK, marks); wr(K_IV, ivState); wr(K_FAULT, faultState);
+    /* Labs are restored into storage only. Anything already open still holds its own
+       in-memory copy, and a running lab ticker saves on every tick - pfTick() would
+       write stale state straight over this import within one tick interval. So a
+       backup that carries lab state reloads instead of refreshing in place. */
+    var labsTouched = false;
+    if (payload.labs && typeof payload.labs === "object") {
+      /* Only keys this build knows about: a file must not be able to write arbitrary
+         localStorage entries through the import path. */
+      labKeys().forEach(function (k) {
+        if (Object.prototype.hasOwnProperty.call(payload.labs, k)) { wr(k, payload.labs[k]); labsTouched = true; }
+      });
+    }
     Array.prototype.forEach.call(document.querySelectorAll(".topic"), function (n) {
       var id = n._t.id;
       n.dataset.done = isDone(id) ? "1" : "0";
@@ -5952,7 +5980,12 @@ var TOPIC_BY_ID = {};
     if (ivInited) { ivRenderList(); ivRenderCoverage(); }
     if (faultsInited && faultOrder.length) { faultShow(); }
     allTopics.forEach(function (t) { fireDoneChange(t.id, isDone(t.id)); });
-    setDataButtonState("importdata", "Imported");
+    if (labsTouched) {
+      setDataButtonState("importdata", "Imported \u00b7 restarting");
+      setTimeout(function () { location.reload(); }, 900);
+    } else {
+      setDataButtonState("importdata", "Imported");
+    }
     return true;
   }
   function initDataTools() {
@@ -7753,7 +7786,8 @@ var TOPIC_BY_ID = {};
     copy(notesMarkdown(), this);
   });
   document.getElementById("d-copyprog").addEventListener("click", function () {
-    copy(JSON.stringify({ done: done, notes: notes, marks: marks, interview: ivState, faults: faultState }, null, 2), this);
+    /* Same envelope as Export data, so a paste into a .json file imports straight back. */
+    copy(JSON.stringify(snapshotAll(), null, 2), this);
   });
   setView("roadmap");
 

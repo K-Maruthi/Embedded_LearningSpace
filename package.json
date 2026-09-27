@@ -7,7 +7,7 @@
     "dev": "tauri dev",
     "build": "tauri build",
     "build:roadmap": "node roadmap-source/build.js",
-    "test": "node specs/dash_progress.spec.js"
+    "test": "node specs/run.js"
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"
