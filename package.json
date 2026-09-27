@@ -10,5 +10,19 @@
   },
   "devDependencies": {
     "@tauri-apps/cli": "^2.0.0"
-  }
+  },
+  "description": "A desktop app for learning **Embedded C the way the machine actually runs it** — from what a bit is, through compilation, linking and startup on a Cortex-M, out to how peripherals and serial protocols behave on real silicon.",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/K-Maruthi/Embedded_LearningSpace.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/K-Maruthi/Embedded_LearningSpace/issues"
+  },
+  "homepage": "https://github.com/K-Maruthi/Embedded_LearningSpace#readme"
 }
