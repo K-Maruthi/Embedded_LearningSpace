@@ -4756,9 +4756,9 @@ arm-none-eabi-objcopy -O binary \
     var upto = a ? Math.min(Math.floor(a.pos), slots.length) : slots.length;
     var rows = '', i;
     for (i = 1; i <= 8; i++) {
-      var s = slots[i], settled = i < upto || (i === upto && !a);
+      var s = slots[i], settled = i < upto || (i === upto && (!a || a.review));
       rows += '<tr' + (a && i === Math.floor(a.pos) ? ' class="cur"' : '') + '><td class="k">' + (i <= 7 ? 'A' + (7 - i) : 'R/W') + '</td><td>' + (s.w1 != null ? s.w1 : '?') + '</td><td>' + (s.w2 != null ? s.w2 : '?') + '</td>' +
-        '<td class="' + (s.loser ? 'bad' : 'good') + '">' + (settled && s.bus != null ? s.bus : '?') + (s.loser ? ' \u2190 ' + s.loser + ' loses' : '') + '</td></tr>';
+        '<td class="' + (s.loser ? 'bad' : 'good') + '">' + (settled && s.bus != null ? s.bus : '?') + (settled && s.loser ? ' \u2190 ' + s.loser + ' loses' : '') + '</td></tr>';
     }
     return '<section class="pf-card" id="pr-i2c-table"><h3>Bit by bit<span class="pf-sub">intent vs what the wire says</span></h3>' +
       '<table class="pr-bit tbl"><tr><th>clock</th><th>M1 wants</th><th>M2 wants</th><th>wire reads</th></tr>' + rows + '</table>' +
