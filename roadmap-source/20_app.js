@@ -4,7 +4,8 @@
 
   var K_DONE = "ecroadmap.v1", K_NOTE = "ecroadmap.notes.v1",
       K_MARK = "ecroadmap.marks.v1", K_THEME = "ecroadmap.theme",
-      K_IV = "ecroadmap.interview.v1", K_FAULT = "ecroadmap.faults.v1";
+      K_IV = "ecroadmap.interview.v1", K_FAULT = "ecroadmap.faults.v1",
+      K_WALK = "ecroadmap.walk.v1";   /* which stages of the two reading labs you opened */
   var REGION_Q = {
     vector: "vector table", text: ".text", rodata: "rodata", data: ".data",
     bss: ".bss", heap: "heap", stack: "stack", mmio: "register", nvic: "interrupt"
@@ -718,6 +719,77 @@
     });
   }
 
+  /* ---- lab progress, for the dashboard ----
+     The two reading labs (Compilation Path, Linker & Startup) have no graded goals,
+     so the honest metric there is which stages you opened. The two bench labs do
+     grade, so their number is goals verified. Everything is read straight out of
+     localStorage: a lab you never opened has its own key, and opening the
+     dashboard must not initialise one. */
+  function walkMark(lab, stage) {
+    var w = rd(K_WALK, null);
+    if (!w || typeof w !== "object") { w = {}; }
+    if (!w[lab] || typeof w[lab] !== "object") { w[lab] = {}; }
+    if (w[lab][stage]) { return; }
+    w[lab][stage] = true;
+    wr(K_WALK, w);
+  }
+  /* Counts always run off the lab's own stage list, never off the size of the
+     stored object: a stage that was renamed or dropped on the way out must not
+     keep inflating someone's progress, and n/total must never read 8/7. */
+  function walkSeen(lab, stage) {
+    var w = rd(K_WALK, null);
+    var s = w && typeof w === "object" ? w[lab] : null;
+    return !!(s && typeof s === "object" && s[stage]);
+  }
+  function walkCount(lab, stages) {
+    var w = rd(K_WALK, null);
+    var s = w && typeof w === "object" ? w[lab] : null;
+    if (!s || typeof s !== "object") { return 0; }
+    var n = 0;
+    stages.forEach(function (id) { if (s[id]) { n++; } });
+    return n;
+  }
+  function storedGoals(key, ids) {
+    var s = rd(key, null);
+    var g = s && s.goals && typeof s.goals === "object" ? s.goals : {};
+    var n = 0;
+    ids.forEach(function (id) { if (g[id]) { n++; } });
+    return { n: n, stage: s && typeof s.stage === "number" ? s.stage : 0 };
+  }
+  function stageIds(meta) {
+    return meta.map(function (s) { return s.id; });
+  }
+  function labRow(name, view, done, total, cap) {
+    var pct = total ? Math.round((done / total) * 100) : 0;
+    return '<div class="stagebar labrow">' +
+      '<button type="button" class="lablink" data-golab="' + view + '">' + esc(name) + '</button>' +
+      '<span class="tr"><i style="width:' + pct + '%"></i></span>' +
+      '<span class="nn">' + done + "/" + total + '</span>' +
+      '<p class="labcap">' + cap + '</p></div>';
+  }
+  function dashLabs() {
+    var h = "";
+    var cStages = Object.keys(COMPILE_DATA);
+    h += labRow("Compilation Path", "compile", walkCount("compile", cStages), cStages.length, "stages opened");
+    h += labRow("Linker & Startup", "playground", walkCount("link", LINK_STAGES), LINK_STAGES.length,
+      'stages opened \u00b7 your script: <b>' + lksandVerdict() + '</b>');
+    var pf = storedGoals(K_PERIPH, stageIds(PF_STAGE_META));
+    h += labRow("Peripherals", "periph", pf.n, PF_STAGE_META.length,
+      "goals verified" + (pf.stage ? ' \u00b7 at <b>' + esc((pfStageById(pf.stage) || {}).name || "") + '</b>' : ''));
+    var pr = storedGoals(K_PROTOS, stageIds(PR_STAGE_META));
+    h += labRow("Protocol Lab", "protocols", pr.n, PR_STAGE_META.length,
+      "goals verified" + (pr.stage ? ' \u00b7 at <b>' + esc((prStageById(pr.stage) || {}).name || "") + '</b>' : ''));
+    return h;
+  }
+  /* The sandbox has a verdict, but the default placement is not something the
+     user achieved - only report a footprint once they have actually opened it. */
+  function lksandVerdict() {
+    if (!walkSeen("link", "sandbox")) { return "not opened"; }
+    var res = lksandCompute(lksandLoad());
+    return res.errors ? res.errors + " placement error" + (res.errors === 1 ? "" : "s")
+      : "fits \u00b7 " + Math.round(res.flashUsed / 1024) + " KB flash, " + Math.round(res.ramUsed / 1024) + " KB ram";
+  }
+
   function refreshDash(force) {
     if (!force && currentView !== "dash") { return; }
     var n = allTopics.length, d = doneCount();
@@ -745,6 +817,14 @@
              '<span class="tr"><i style="width:' + pct + '%"></i></span>' +
              '<span class="nn">' + sd + "/" + s.topics.length + "</span></div>";
     }).join("");
+
+    var lh = document.getElementById("d-labs");
+    if (lh) {
+      lh.innerHTML = dashLabs();
+      Array.prototype.forEach.call(lh.querySelectorAll("[data-golab]"), function (b) {
+        b.addEventListener("click", function () { setView(b.dataset.golab); });
+      });
+    }
 
     var today = new Date(); today.setHours(0, 0, 0, 0);
     var counts = {}, total30 = 0;
@@ -1957,6 +2037,7 @@ bx      lr</pre></div><div class="complab-card"><h4>Output</h4><div class="compl
     var host=document.getElementById("complab-stage"), nav=document.getElementById("complab-progress");
     if(!host||!nav)return;
     var d=COMPILE_DATA[stage];
+    walkMark("compile", stage);
     Array.prototype.forEach.call(nav.querySelectorAll("button[data-compile-stage]"),function(b){b.setAttribute("aria-selected",String(b.dataset.compileStage===stage));});
     var body = (clab.mode === "bench") ? clabBenchHtml(stage) : d.body;
     var live = clabLiveHtml(stage);
@@ -2671,6 +2752,7 @@ arm-none-eabi-objcopy -O binary \
     var host=document.getElementById("linklab-stage"), nav=document.getElementById("linklab-progress");
     if (!host || !nav) { return; }
     var d=LINK_DATA[stage];
+    walkMark("link", stage);
     if(stage==="sandbox"){ d={title:d.title, intro:d.intro, body:lksandBody()}; }
     Array.prototype.forEach.call(nav.querySelectorAll("button[data-link-stage]"),function(b){b.setAttribute("aria-selected",String(b.dataset.linkStage===stage));});
     host.innerHTML='<div class="linklab-stage-head"><h3>'+esc(d.title)+'</h3><p>'+esc(d.intro)+'</p></div><div class="linklab-body">'+d.body+'</div>';

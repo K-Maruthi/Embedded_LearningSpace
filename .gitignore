@@ -9,6 +9,8 @@ target/
 .qoder/
 dev-run.log
 *.log
+# verification screenshots taken while working on a lab
+shot_*.png
 
 # --- OS cruft ---
 Thumbs.db
