@@ -50,7 +50,21 @@ for (const v of railViews) if (!bodyIds.has(v)) fail("rail button data-v="+v+" h
 for (const id of bodyIds) if (!railViews.has(id)) fail("view-"+id+" exists but the rail cannot navigate to it");
 const subIds = new Set([...body.matchAll(/id="sv-([a-z0-9_-]+)"/g)].map(m=>m[1]));
 for (const b of railBtns) if (b.sv && !subIds.has(b.sv)) fail("rail button data-sv="+b.sv+" has no sv-"+b.sv+" in the body");
+
 if ((shell.match(/aria-pressed="true"/g)||[]).length !== 1) fail("the rail must start with exactly one pressed button");
+
+/* The practice sub-nav is the same contract one level down. It held a "Linker &
+   startup" button with no section behind it for as long as it worked, because the
+   app special-cased that one name into a jump - so nothing ever had to make the
+   button true. A nav item is now checked against the sections, never against a
+   special case in the code. */
+const pvStart = body.indexOf('id="pv-subnav"');
+if (pvStart < 0) fail("no #pv-subnav in 02_body.html");
+else {
+  const pvNav = body.slice(pvStart, body.indexOf("</nav>", pvStart));
+  for (const m of pvNav.matchAll(/data-sv="([^"]+)"/g))
+    if (!subIds.has(m[1])) fail("practice sub-nav button "+m[1]+" has no #sv-"+m[1]+" section");
+}
 
 /* Content breakpoints are measured off the content column, and the rail takes
    --rail (212px) out of the viewport before any content starts. A rule written as

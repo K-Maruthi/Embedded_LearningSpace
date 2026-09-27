@@ -84,7 +84,16 @@ const pgBtnEls = ['bitlab', 'diffs'].map((n) => { const e = el(''); e.dataset = 
 
 let scrolled = 0;
 const doc = {
-  getElementById: (id) => { if (!(id in byId)) { throw new Error('spec DOM has no element #' + id); } return byId[id]; },
+  getElementById: (id) => {
+    if (!(id in byId)) {
+      /* #sv-* lookups are probes - setSubview asks whether a track has a section
+         before applying it, so a name with no section answers null the way a browser
+         would. Every other id is a hard dependency and still fails loudly here. */
+      if (/^sv-/.test(id)) { return null; }
+      throw new Error('spec DOM has no element #' + id);
+    }
+    return byId[id];
+  },
   querySelectorAll: (sel) => {
     if (sel === '.view') { return Object.values(viewNodes); }
     if (sel === '.rgroup') { return Object.values(grpObjs); }
@@ -124,6 +133,7 @@ function ok(name, cond, extra) {
 }
 function pressed() { return btnEls.filter((b) => b.attrs['aria-pressed'] === 'true'); }
 function shown() { return Object.values(viewNodes).filter((n) => !n.hidden).map((n) => n.id); }
+function shownSub() { return subviews.filter((n) => !byId['sv-' + n].hidden).map((n) => n); }
 
 /* ---- 1. the rail as written is a complete, unambiguous map of the app ---- */
 ok('the rail has four groups', groups.length === 4, groups.map((g) => g.label));
@@ -167,13 +177,20 @@ views.forEach(function (v) {
   ok('practice/' + sv + ': the view is still practice', M.view() === 'practice' && shown()[0] === 'view-practice');
 });
 
-/* ---- 4. the linker track is a redirect, so the Labs button must take the mark ---- */
+/* ---- 4. a nav button is not a track unless a section backs it ---- */
+ok('every practice sub-nav button has a section behind it',
+  pvBtns.every((n) => subviews.indexOf(n) >= 0), pvBtns.filter((n) => subviews.indexOf(n) < 0));
+ok('the retired linker jump is out of the sub-nav', pvBtns.indexOf('linker') < 0, pvBtns);
+ok('and out of the rail', rail.every((b) => b.sv !== 'linker'),
+  rail.filter((b) => b.sv === 'linker').map((b) => b.label));
 M.setView('practice');
+const subBefore = M.sub(), subShownBefore = shownSub().join();
 M.setSubview('linker');
-ok('the linker track redirects to the playground view', M.view() === 'playground' && shown()[0] === 'view-playground');
-ok('and presses the Linker button, not a Practice track',
-  pressed().length === 1 && pressed()[0].dataset.v === 'playground' && !pressed()[0].dataset.sv,
-  pressed().map((b) => b.textContent));
+ok('a dead track still leaves exactly one section showing', shownSub().join() === subShownBefore,
+  [subShownBefore, shownSub().join()]);
+ok('and does not move the current track', M.sub() === subBefore, [subBefore, M.sub()]);
+ok('and still leaves exactly one rail button pressed',
+  pressed().length === 1 && pressed()[0].dataset.sv === subBefore, pressed().map((b) => b.dataset.sv || b.dataset.v));
 
 /* ---- 5. one section open at a time, and it is the one you are in ---- */
 M.setView('roadmap');

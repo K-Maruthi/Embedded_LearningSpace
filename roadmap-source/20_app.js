@@ -720,13 +720,12 @@
     if (cv) { cv.textContent = pressed.textContent; }
   }
   function setSubview(sv) {
-    if (sv === "linker") {
-      Array.prototype.forEach.call(document.querySelectorAll("#pv-subnav button"), function (b) {
-        b.setAttribute("aria-current", String(b.dataset.sv === sv));
-      });
-      setView("playground");
-      return;
-    }
+    /* A track has to have a section behind it. Practice used to carry a "Linker &
+       startup" button with no section of its own, kept alive by a hardcoded jump
+       into the Labs view - and a nav item that only exists as a special case in the
+       code is how a dead button survives a build check. Applying an unknown name
+       would hide all four sections to show no fifth, so it is ignored instead. */
+    if (!document.getElementById("sv-" + sv)) { return; }
     currentSubview = sv;
     ["interview", "lab", "faults", "tools"].forEach(function (name) {
       var node = document.getElementById("sv-" + name);
