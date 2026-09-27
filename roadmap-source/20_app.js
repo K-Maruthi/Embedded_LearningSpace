@@ -672,12 +672,10 @@
   var currentView = "roadmap", currentSubview = "interview", currentPgSubview = "bitlab";
   function setView(v) {
     currentView = v;
-    ["roadmap", "dash", "mosaic", "practice", "graph", "compile", "playground", "periph", "protocols"].forEach(function (name) {
-      var n = document.getElementById("view-" + name);
-      if (n) { n.hidden = (name !== v); }
-    });
-    Array.prototype.forEach.call(document.querySelectorAll(".viewsw button"), function (b) {
-      b.setAttribute("aria-pressed", String(b.dataset.v === v));
+    /* The body owns the set of views: adding one is a new .view element in the
+       body plus a rail button, not an edit to a list of names kept in the app. */
+    Array.prototype.forEach.call(document.querySelectorAll(".view"), function (n) {
+      n.hidden = n.id !== "view-" + v;
     });
     document.getElementById("q").style.display = (v === "roadmap") ? "" : "none";
     document.getElementById("expandall").style.display = (v === "roadmap") ? "" : "none";
@@ -689,7 +687,37 @@
     if (v === "playground") { initLinkLab(); }
     if (v === "periph") { initPeriph(); }
     if (v === "protocols") { initProtocols(); }
+    syncRail();
     window.scrollTo(0, 0);
+  }
+  /* Exactly one rail button is pressed. A rail button is either a view on its own
+     or a track inside Practice (data-v + data-sv), and matching on data-v alone
+     would light all four Practice tracks at once. The masthead crumb is read off
+     the pressed button rather than a second table of names, so the rail stays the
+     only place these labels are written. */
+  function syncRail() {
+    var pressed = null;
+    Array.prototype.forEach.call(document.querySelectorAll(".viewsw button"), function (b) {
+      var on = b.dataset.v === currentView && (!b.dataset.sv || b.dataset.sv === currentSubview);
+      b.setAttribute("aria-pressed", String(on));
+      if (on) { pressed = b; }
+    });
+    if (!pressed) { return; }
+    var grp = pressed.closest(".rgroup");
+    /* One section expanded at a time. The rail is a map of where you are, not a
+       list of everything there is - the count on a closed header says how much it
+       holds, and a jump into a collapsed section opens it rather than hiding where
+       you landed. */
+    Array.prototype.forEach.call(document.querySelectorAll(".rgroup"), function (d) {
+      d.open = (d === grp);
+    });
+    var name = grp ? grp.querySelector(".rname") : null;
+    var cg = document.getElementById("crumb-grp");
+    var cv = document.getElementById("crumb-view");
+    /* .rname, not the summary: the summary also holds the item count, and "Labs4"
+       is not the name of anywhere. */
+    if (cg) { cg.textContent = name ? name.textContent.trim() : ""; }
+    if (cv) { cv.textContent = pressed.textContent; }
   }
   function setSubview(sv) {
     if (sv === "linker") {
@@ -707,6 +735,7 @@
     Array.prototype.forEach.call(document.querySelectorAll("#pv-subnav button"), function (b) {
       b.setAttribute("aria-current", String(b.dataset.sv === sv));
     });
+    syncRail();
     if (sv === "interview" && !ivInited) { initInterview(); }
     if (sv === "lab" && !labInited) { initLab(); }
     if (sv === "faults" && !faultsInited) { initFaults(); }
@@ -1951,6 +1980,9 @@
       e.preventDefault();
       e.stopPropagation();
       setView(b.dataset.v);
+      /* setView("practice") enters whatever track was current last; a rail button
+         names the track it is for, so that one wins. */
+      if (b.dataset.sv) { setSubview(b.dataset.sv); }
     });
   });
 

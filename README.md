@@ -32,14 +32,17 @@ editor** so the tool never teaches a wrong idiom.
 
 ## What you get today
 
-Navigation is grouped into three clusters in the top bar.
+Navigation lives in a fixed left rail, grouped into four sections — Read, Labs,
+Practice, Progress. Each section expands on click and shows how much it holds while
+collapsed; the thin bar above the content names the section and view you are in.
 
 ### Learn
 - **Roadmap** — 7 stages, 163 topics, 8 cross-cutting lenses, live search, per-topic
   markdown notes, and a "mark as learned" gate that needs real notes before it unlocks
   (active-recall pedagogy).
 - **Dashboard** — learned counts, per-stage progress, a last-30-days activity heatmap,
-  prerequisite-aware "what to read next", and clipboard export of notes/progress.
+  prerequisite-aware "what to read next", a graded row for each of the four labs, and
+  clipboard export of notes/progress.
 - **Mosaic** — one puzzle piece per topic that lifts to reveal a chip-die floorplan.
 - **Graph** — a custom force-directed concept graph (prerequisites, failure patterns,
   related topics) with layouts, edge toggles and deep links back to the roadmap.
@@ -113,10 +116,14 @@ The app serves `src/index.html`, which is **generated** from the fragments in
 npm run build:roadmap
 ```
 
-This validates the fragments (JavaScript syntax, exactly one `<style>` block, view targets,
-graph hooks), concatenates them into `roadmap-source/embedded-c-roadmap.html`, and copies
-the result to `src/index.html`. Keep the fragments — not the generated HTML — as the place
-you edit.
+This validates the fragments (JavaScript syntax, exactly one `<style>` block, every view
+reachable from the rail and every rail button pointing at a real view, graph hooks),
+concatenates them into `roadmap-source/embedded-c-roadmap.html`, and copies the result to
+`src/index.html`. Keep the fragments — not the generated HTML — as the place you edit.
+
+Behaviour that is easy to break quietly is covered by dependency-free specs under `specs/`,
+run with `npm test`. They slice the code out of the fragments and exercise it over stubs,
+so there is no browser, no test framework and nothing to install.
 
 ### Optional: real ARM compilation
 
@@ -143,6 +150,7 @@ src/index.html      generated single-file app served by Tauri (do not hand-edit)
 src-tauri/          Rust backend + Tauri config (window, capabilities, bundling,
                     toolchain-detection and compile pipeline IPC commands)
 roadmap-source/     the real source: HTML/JS fragments, build.js, validate_build.js
+specs/              dependency-free behaviour specs, run with npm test
 ```
 
 ## Constraints worth knowing
