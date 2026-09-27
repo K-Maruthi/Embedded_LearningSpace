@@ -1,0 +1,489 @@
+================================================================================
+EMBEDDED LEARNING SPACE — PROJECT STATUS REPORT
+Generated: 2026-09-26
+================================================================================
+
+1. PROJECT SNAPSHOT
+--------------------------------------------------------------------------------
+Name        : Embedded Learning Space (com.embeddedc.learning.space)
+Version     : 1.0.0
+Purpose     : Desktop wrap of a browser-local, single-page Embedded C learning
+              roadmap — from bit-level C fundamentals through Cortex-M
+              compilation, linking, startup and system-level failure analysis.
+Shell       : Tauri 2 (Rust), window 1440x920 (min 1050x700), NSIS + MSI bundles,
+              WebView2 downloadBootstrapper install mode.
+Frontend    : One standalone HTML file (src/index.html, ~765 KB) produced by a
+              concatenation build from roadmap-source/ fragments. Zero runtime
+              dependencies: no CDN, no backend, no framework. Vanilla ES5-style
+              JS in IIFEs, custom SVG force-graph, own tiny markdown renderer.
+Data model  : 7 stages / 163 topics / 8 lenses / 10 memory-map regions,
+              25 interview questions (4 tracks x 2 levels x 4 formats),
+              10 fault-triage scenarios, 5 failure-pattern clusters,
+              7 compiler diffs, 109 canonical topic-metadata entries.
+Persistence : localStorage only, namespaced ecroadmap.* (done, notes, marks,
+              theme, interview answers, fault state). Versioned JSON
+              export/import for full-state backup.
+Build chain : roadmap-source/build.sh -> embedded-c-roadmap.html -> copied to
+              src/index.html (verified byte-identical at time of this report)
+              -> packaged by Tauri via frontendDist "../src".
+Commands    : npm install | npm run dev (tauri dev) | npm run build (tauri build)
+              Artifacts land in src-tauri/target/release/bundle/.
+
+2. FEATURE INVENTORY AND RATINGS
+--------------------------------------------------------------------------------
+Ratings: 5 = excellent/complete, 4 = solid, 3 = good but limited,
+         2 = minimal, 1 = placeholder. "Score" is feature-quality only;
+         gaps are tracked in sections 3 and 4.
+
+ID   FEATURE                         RATING   NOTES
+F1   Roadmap view (7 stages, 163     [5/5]    Every topic rendered through 8 consistent
+     topics, 8 cross-cutting lenses)           lenses (what it is, compiler, linker,
+                                               memory, run time, CPU/hardware, how it
+                                               bites you, ...). Lens mode reads one
+                                               lens across the whole roadmap. Clickable
+                                               MCU memory map filters topics by region.
+F2   Live topic search               [4/5]    Single-box filter over the roadmap; no
+                                               full-text search across notes/lenses.
+F3   Markdown notes per topic        [5/5]    Own tiny markdown renderer (headings,
+                                               lists, code fences, blockquotes, links),
+                                               autosave, "saved" indicator, render/edit
+                                               toggle.
+F4   "Mark as learned" note gate     [5/5]    Requires >= 12 words of personal notes
+                                               before a topic can be marked learned —
+                                               a deliberate active-recall pedagogy gate.
+F5   Bookmarks                       [4/5]    Toggle per topic, surfaced on dashboard.
+F6   Dashboard                       [4/5]    Learned count, per-stage progress bars,
+                                               last-30-days activity heatmap, "ready to
+                                               start" next-topic suggestions (prereq
+                                               aware), bookmark/note lists, clipboard
+                                               export of all notes / progress.
+F7   Mosaic view                     [4/5]    One puzzle piece per topic in roadmap
+                                               order; learned topics lift to reveal a
+                                               chip-die floorplan; "peek" full picture.
+                                               Purely motivational, no data value-add.
+F8   Concept graph                   [4/5]    Dependency-free custom force layout over
+                                               the same canonical model: prereq
+                                               (directed), same-failure-pattern
+                                               clusters, related, in-text mentions.
+                                               3 layouts (by stage / by pattern / free),
+                                               edge-kind toggles, cluster focus, drag,
+                                               zoom, reset, hover labels, deep-link to
+                                               roadmap topic. Labels-on-hover keeps
+                                               163 nodes readable. Missing: minimap,
+                                               search-to-node, saved layouts.
+F9   Compilation Path lab            [4/5]    8-stage walkthrough (source -> preprocess
+     (view)                                   -> compile -> assemble -> object -> link
+                                               -> image -> check) for one Cortex-M
+                                               example with per-stage artifacts.
+F10  Linker & Startup lab (view)     [5/5]    8-stage interactive model of one fixed
+                                               Cortex-M4 memory map: MCU, files, script
+                                               rule-by-rule inspector (21 link rules
+                                               with plain/memory/runtime/what-breaks
+                                               explanations), object->section mapping,
+                                               startup flow, build-artifact evolution,
+                                               quizzes, click-in-order exercises,
+                                               what-if diagnosis, reconstruct-the-script
+                                               game, recall cards; + stage 8 sandbox
+                                               (see F24).
+F11  Interview prep (practice)       [4/5]    25 questions, filter by track/level/
+                                               format, personal answers, rubric
+                                               reveal + lens-coverage self-check-off,
+                                               coverage chart, timed mock rounds.
+                                               Explicitly not auto-graded.
+F12  Memory-map lab (practice)       [4/5]    Type a C declaration -> teaching model
+                                               places it (.text/.rodata/.data/.bss/
+                                               stack) with running Flash/RAM byte
+                                               totals. Honest about being a model,
+                                               not a compiler.
+F13  Fault triage (practice)         [3/5]    Register-dump scenarios (CFSR etc.),
+                                               4 options, session score, solved state
+                                               persisted. Only 10 scenarios — content
+                                               is the bottleneck, not the UI.
+F14  C tools — Bits & layout         [4/5]    Integer-op model with type/width
+                                               promotion, two's complement bit editor,
+                                               signed/unsigned shifts, endianness,
+                                               struct padding/offset layout, register
+                                               bit decoder (CFSR preset + custom
+                                               bitfields). 2026-09-26 hotfix: added
+                                               the previously-missing CSS for the
+                                               whole C tools section (.pggrid /
+                                               .pgpanel / .pgout / .bitbox /
+                                               .bytebox / .memberrow / .structbar
+                                               / .diffcard etc.) — was rendering
+                                               as unstyled browser-default HTML.
+F15  C tools — Compiler diffs        [4/5]    7 pre-authored, toolchain-verified A/B
+                                               diffs (e.g. effect of const on a table).
+                                               Small but trustworthy by design.
+F16  Theme toggle                    [3/5]    Manual light/dark switch persisted;
+                                               initial state also follows
+                                               prefers-color-scheme. No "follow
+                                               system" mode setting.
+F17  Full-state export/import        [4/5]    One versioned JSON backup (schema tag,
+                                               app tag, timestamp) covering done/notes/
+                                               marks/interview/faults/theme; import
+                                               validates app+schema, rehydrates all
+                                               views. Uses browser Blob download +
+                                               file picker (works, but not native).
+F18  Runtime API (window.             [4/5]   exportAll/importAll, data, topics,
+     EmbeddedCRoadmap)                         edges(), clusters(), cards() (flashcard
+                                               deck), stats(), interview/faults
+                                               namespaces, goTopic/focus, view/
+                                               practice navigation, onHook +
+                                               onDoneChange for external plugins
+                                               (e.g. a future 3D graph).
+F19  Data-integrity validation       [4/5]    Startup asserts: unique topic ids,
+                                               every TOPIC_META id matches a topic,
+                                               prereq/related references resolve.
+                                               validate_build.js gates build.sh.
+F20  Tauri desktop shell             [3/5]    Window config, capabilities, NSIS/MSI
+                                               bundling — plus since N2: real Rust
+                                               commands (toolchain_status,
+                                               pipeline_sources, pipeline_run) and
+                                               async spawn_blocking pipelines.
+F21  Live toolchain pipeline (N2)    [4/5]    DONE 2026-09-26. Detects an installed
+     (Compilation Path lab)                    arm-none-eabi-gcc (env override /
+                                               PATH / known roots), compiles the fixed
+                                               lab example through real -E/-S/-c/
+                                               objdump/link/size/objcopy in a temp
+                                               dir; per-stage 'real tool output'
+                                               panel + status chip, graceful
+                                               'teaching model only' fallback.
+F22  Compilation Path bench mode     [4/5]    DONE. Lab bench: editable main.c /
+     (editable sources)                        startup.s / linker.ld (fixed slots,
+                                               200 KB cap, drafts persist in
+                                               localStorage), Build button runs them
+                                               through the real toolchain; per-stage
+                                               explanations parsed from the actual
+                                               build (labels, section sizes, text/
+                                               data/bss, vector words, stop-point
+                                               diagnostics). Verified live against
+                                               Arm GNU Toolchain (mingw-w64).
+                                               2026-09-26 hotfix: Teaching / Lab
+                                               bench toggle now highlights the
+                                               active mode (chip HTML previously
+                                               stale until next clabAfter).
+F23  Reproducible build automation   [5/5]    DONE (closes W1): npm run
+                                               build:roadmap = validate + concat +
+                                               sync src/index.html in one step.
+F24  Linker-script sandbox (N3)      [4/5]    DONE 2026-09-26. Linker & Startup lab
+     (Linker lab stage 8)                      stage 8 "Sandbox": FLASH/RAM toggle
+                                               per output section (.isr_vector/.text/
+                                               .rodata/.data/.bss), editable sizes +
+                                               stack/heap reserves; live VMA/LMA
+                                               model, flash/RAM usage bars with
+                                               overflow state, rule-based conse-
+                                               quence diagnostics and the implied
+                                               linker.ld, all regenerated live;
+                                               layout persisted (ecroadmap.lksandbox.
+                                               v1). Pure local model — works in the
+                                               plain browser, no toolchain needed.
+                                               v1.0.1: script view is now interactive
+                                               — hovering a section row highlights
+                                               its linker.ld line and vice-versa, click
+                                               a line to flash the row; error state
+                                               colours the offending script line.
+                                               Also added one-click "Try a scenario"
+                                               presets (data→FLASH, text→RAM, bss→
+                                               FLASH, vector→RAM, RAM overflow) so
+                                               failure modes are instantly explorable.
+                                               The "type raw linker.ld + real ld
+                                               errors" surface stays single-sourced
+                                               in F22 bench mode — no toolchain
+                                               duplication.
+F25  Peripheral playground (N4)      [4/5]    DONE 2026-09-26. New top-level "Periph"
+     (top-level tab)                           view. Live Cortex-M4 teaching model:
+                                               RCC AHB1/APB1 clock enables gate every
+                                               write (writes to a clock-off periph
+                                               drop + log entry, matching real hard-
+                                               ware). GPIOA MODER (16-tile IN/OUT/
+                                               AF/AN cycler) + OTYPER/IDR/ODR as 16-
+                                               bit bitbox rows. IDR is driven by four
+                                               virtual switches (SW0-3 -> PA0-3) with
+                                               pull-up/down respected. TIM2 CR1.CEN /
+                                               DIER.UIE / SR.UIF (W1C) / PSC / ARR /
+                                               CNT with a running prescaler/divider.
+                                               NVIC ISER0 bit 28 unmasks TIM2. Sin-
+                                               gle 10 Hz setInterval drives the whole
+                                               simulation; on update the model fires
+                                               the ISR (clears UIF, XORs PA5) only
+                                               when DIER+NVIC both allow it, and logs
+                                               the masked/ignored cases. Observable
+                                               side: 16-LED strip (PA5 = onboard),
+                                               TIM2 CNT-vs-ARR waveform, event log.
+                                               Three fixed, correct C presets -- "Blink
+                                               PA5 via TIM2 IRQ (2 Hz)", "Bug: forgot
+                                               GPIOA clock" and "Poll SW0 -> light
+                                               PA5" -- each stepped line-by-line via
+                                               Next step / Run all setup buttons. No
+                                               free-form C editing (deliberate: the
+                                               user's requirement was "no wrong info").
+                                               State persisted under ecroadmap.periph.
+                                               v1. Pure local model, works in the
+                                               plain browser. v1.1 candidate: add
+                                               USART2 and SysTick; wire real ISR code
+                                               through the F22 bench toolchain.
+                                               v1.0.1: added a "Your code" panel that
+                                               reverse-engineers every user click --
+                                               bit toggles, pin-mode tile cycles and
+                                               switch presses -- into the equivalent
+                                               canonical C statement (uses vendor
+                                               macro names such as RCC_AHB1ENR_GPIOAEN
+                                               and TIM_CR1_CEN where the register bit
+                                               is well-known, ICER for masking an ISER
+                                               bit, W1C-correct form for SR.UIF). Copy
+                                               + Clear buttons. Preset steps are NOT
+                                               emitted here so the panel stays a clean
+                                               record of what the user did by hand.
+                                               v1.0.2: reserved-bits UX fix -- register
+                                               rows show full width but only modelled
+                                               bits (active list) are clickable; the
+                                               rest render dashed/.ro and pfRenderLive
+                                               never strips .ro.
+                                               v1.2 STAGED CURRICULUM (2026-09-26):
+                                               the flat one-screen model is now a
+                                               10-stage curriculum behind a tab strip
+                                               (a check mark marks a stage whose goal
+                                               is achieved): 1 Mental model (live
+                                               memory-map peeks + clock tree + quiz),
+                                               2 Bits & macros (|= vs &= ~ on
+                                               AHB1ENR), 3 GPIO output (MODER+ODR
+                                               goal), 4 Input & polling (poll loop
+                                               with CPU-busy indicator), 5 Timer as
+                                               divider (rate readout, PSC/ARR goal),
+                                               6 Three switches (DIER x ISER x
+                                               PRIMASK gate table), 7 Priority &
+                                               nesting, 8 The RMW race, 9 Bring-up
+                                               challenge (9-item graded checklist,
+                                               no hints), 10 Playground (full bank +
+                                               presets). Model deepening: PRIMASK
+                                               masks all IRQs (requests stay pending);
+                                               live per-IRQ NVIC state (idle/req/
+                                               pend/act) gate table; IPR +/- steppers
+                                               with strict-priority preemption (ties
+                                               never preempt); handler stack with
+                                               PF_ISR_MS=400 so nesting is visible;
+                                               TIM3 as 2nd IRQ source (APB1ENR bit1,
+                                               ISER bit29, PA6, own waveform card);
+                                               two-phase RMW race simulator on ODR
+                                               with lost-update counter + BSRR-immune
+                                               path; APB1 clock mask widened to 0x3.
+                                               Codegen: timer register codes shared
+                                               TIM2/TIM3 via per-name prefix; userCode
+                                               entries became {stage,text} (old
+                                               strings auto-migrate to stage 10),
+                                               Your-code panel groups lines under
+                                               /* Stage N . name */ headers; PRIMASK
+                                               toggle emits __disable_irq()/
+                                               __enable_irq(), IPR steppers emit
+                                               NVIC_SetPriority(...). State still
+                                               ecroadmap.periph.v1 (additive merge).
+                                               v1.3 BLUEPRINT HARVEST (closes N13-
+                                               N15): stage 7 gained a swim-lane
+                                               INTERRUPT TIMELINE (main/TIM2/TIM3
+                                               lanes over a per-tick CPU context
+                                               ring tlHist, 150 samples ~15 s;
+                                               preemption = stacked bars, pending =
+                                               triangle marker). Stage 5 waveform is
+                                               now a 2-row SVG: CNT sawtooth + PWM
+                                               output vs CCR — the ARR line is
+                                               draggable (pointer events, writes
+                                               TIM2->ARR via the clock-aware path,
+                                               one canonical code line on release)
+                                               and a CCR slider (tim2.CCR/tim3.CCR,
+                                               0..65535, visual duty only by design
+                                               — no PWM channel modelled) draws the
+                                               PWM edge; PA5★ bulb opacity tracks
+                                               duty% while TIM2 runs. Stage 3 gained
+                                               INSIDE THE PIN: live SVG pin cell for
+                                               PA5 — P-MOS/N-MOS switches, pull-up/
+                                               pull-down resistors, Schmitt trigger,
+                                               pad states driven by MODER/OTYPER/
+                                               PUPDR/ODR/IDR incl. floating-input
+                                               flicker and open-drain release.
+
+  v1.4 NAV + PROTOCOL LAB (opens N17): masthead view switcher regrouped from a
+  flat, overflow:hidden 8-tab bar into three labelled, wrap-safe clusters —
+  Learn / Labs / Practice (.vgroup + .vlab, .viewsw now flex-wrap). Same
+  data-v keys, so setView + graph hooks untouched; a Protocols tab joins Labs.
+  NEW PROTOCOL LAB view (#view-protocols, state ecroadmap.protocols.v1, fully
+  additive — ecroadmap.periph.v1 untouched): a shared logic-analyser primitive
+  prLA() (multi-symbol step waveform + labelled decode band + receiver sample
+  dots + moving playhead) drives 4 graded stages reusing the .pf-* card/grid/
+  stagenav/goal idioms.
+    Stage 1 Signals 101 — line physics: Push-pull vs Open-drain vs Input(Hi-Z)
+      x pull none/up/down resolves to high/low/FLOATING (dashed flicker), live
+      MOSFET+resistor wire node, plus a wired-AND rig (2 OD drivers + pull-up,
+      bus high only when both release) as the I2C seed. Codegen GPIOA->OTYPER /
+      PUPDR / ODR / MODER.
+    Stage 2 The frame — pick a byte, prLA animates [Start][D0..D7 LSB-first]
+      [Parity?][Stop]; parity/stop knobs grow the frame; Send byte walks the
+      playhead and decodes. Codegen USART1->BRR/CR1/CR2/DR (+TXE spin).
+    Stage 3 Sampling & baud — receiver samples mid-bit; a baud-error slider
+      drifts sample points until they cross a bit boundary (far bits break
+      first), a mis-sample corrupts the decoded char (errSeen -> goal).
+    Stage 4 Terminal — type -> queue of frames -> sample -> decode; rxLog rows
+      show sent vs got; baud presets + live BRR readout; input focus preserved
+      (targeted #pr-la-host / row-append updates, not full re-render mid-type).
+  Build 981,819 bytes, Validation OK (single <style>, node --check, view
+  targets). SPI (CPOL/CPHA), I2C (off the wired-AND seed), ADC, DMA, CAN, RTOS,
+  time-travel scrub still deferred N17-followups.
+
+Overall content/pedagogy quality: outstanding (avg ~4.5). The desktop shell and
+engineering scaffolding (tests, tooling, native integration) lag the content
+(avg ~3.5).
+
+3. CURRENT PROJECT HEALTH
+--------------------------------------------------------------------------------
+Strengths
+  - Zero-dependency, fully offline, single-file app; reproducible build.
+  - Canonical topic registry + startup validation prevents content drift.
+  - Strong pedagogy: lens model, note-gated mastery, causal-order exercises,
+    teach-back drills, self-graded rubrics.
+  - src/index.html confirmed in sync with the last standalone build.
+
+Weaknesses / risks
+  W1  (CLOSED) roadmap-source -> src/index.html sync is automated by
+      `npm run build:roadmap` (validate + concat + copy in one command).
+  W2  No automated tests beyond id/reference validation. Lab models (section
+      placement, bit ops, struct layout, edge builder) are regression-prone.
+      (Partially improved: Rust pipeline/toolchain now has 8 unit tests +
+      an --ignored live-toolchain integration test, all passing.)
+  W3  CSP is null in tauri.conf.json; the app renders stored user markdown.
+      Escaping is done manually (esc/md) — one gap becomes an XSS surface.
+      (Risk slightly raised by bench mode: user C code round-trips through the
+      DOM — all rendered via esc()/hl(), kept monospace-only, no markdown.)
+  W4  localStorage in WebView2 can be wiped by browser/OS cleanup; backups are
+      opt-in and easy to forget. No automatic timestamped backup.
+  W5  Export uses DOM anchor download rather than a native save dialog.
+  W6  Monolithic ~800 KB generated HTML, ~2,700-line app file, ES5 idiom;
+      hard to review, no module boundaries, no linting setup.
+  W7  Content depth is uneven: 163 roadmap topics vs 10 fault scenarios,
+      25 interview questions, 7 diffs — practice loops run dry quickly.
+  W8  No app version/changelog surface in UI; package.json, Cargo.toml and
+      tauri.conf.json each carry "1.0.0" manually (three sources of truth).
+  W9  Mobile (Tauri 2 supports iOS/Android) and multi-language not addressed.
+
+4. POSSIBLE IMPROVEMENTS
+--------------------------------------------------------------------------------
+Ranked by (impact / effort). Prefix: Q = quick win, S = structural.
+
+I1  (Q) Automate the build pipeline: npm script that runs validate_build.js +
+    build.sh + copies output to src/index.html, wired as a Tauri beforeDev-
+    Command/beforeBuildCommand. Eliminates W1 entirely.
+I2  (Q) Set a real CSP and add a regression test for markdown/XSS input on
+    notes. Eliminates the sharpest half of W3.
+I3  (Q) Native backup: tauri-plugin-dialog + tauri-plugin-fs so Export opens a
+    real Save dialog and Import a native picker; add autosave snapshot to
+    appDataDir on every N state changes + on close. Fixes W4/W5.
+I4  (Q) Unit tests (plain node, no framework) for pure logic: hl()/md()/esc(),
+    edges() dedupe, memory-map placement rules, bitlab arithmetic, struct
+    layout, backup schema round-trip. Addresses W2.
+I5  (Q) Version single-sourcing: read version from package.json in
+    build.rs/tauri.conf; show version + "what's new" in a footer/about panel.
+I6  (S) Keyboard layer: "/" focuses search, 1-7 switch views, arrow-key topic
+    navigation, command palette over topics (title + code + lens text).
+I7  (S) Graph UX: search-to-node, node pinning, minimap, layout persistence,
+    "focus prerequisites of learned topic" mode.
+I8  (S) Accessibility pass: focus-visible audit, aria-live coverage for quiz
+    feedback, color-contrast check on lens palettes, reduced-motion setting
+    for mosaic lift + force layout.
+I9  (S) Split the generated bundle in dev mode: keep fragments, load them via
+    a dev-time aggregator so diffs are reviewable; keep single-file for
+    release. Long term, introduce ES modules + a bundler only if the app
+    keeps growing.
+I10 (S) Content scaling where the UI is already built: more FAULTS (10 -> 40+),
+    more interview questions per track, more DIFFS. UI cost is near zero;
+    only authored content is the work.
+
+5. NEW FEATURE CANDIDATES
+--------------------------------------------------------------------------------
+N1  Spaced-repetition engine over the existing cards() deck + notes. The
+    flashcard data, done-state and hooks already exist; add SM-2-style
+    scheduling, a daily "review queue" on the dashboard, and streaks.
+    Highest-retention win for a learning app.                        [impact: H]
+N2  [DONE 2026-09-26 — see F21/F22] Real toolchain integration: Rust
+    commands run the Compilation Path example through a detected
+    arm-none-eabi-gcc. Remaining follow-ups deliberately NOT in this slice:
+    linker.ld editing wired into the Linker lab via the same pipeline
+    (superseded by N3's local model first), per-user-script caching, native
+    save of build artifacts.
+N3  [DONE 2026-09-26 — see F24] Interactive linker-script sandbox: Linker &
+    Startup lab stage 8. Move sections between FLASH/RAM, editable sizes,
+    live VMA/LMA + overflow feedback, memory bars, implied linker.ld and
+    consequence diagnostics from a local placement model (no toolchain).
+    Follow-up candidate: wire the sandbox layout into the real pipeline via
+    generated linker.ld + bench sources (N2 commands already accept both).
+N4  [DONE 2026-09-26 — see F25] Peripheral playground: simulated GPIO/TIM2/
+    NVIC register bank with clock-gated writes, read-modify-write, prescaler
+    countdown, ISR dispatch via NVIC, and observable LED / switch / waveform /
+    event-log side. Reuses the bit-decoder bitbox UI pattern from F14. Three
+    fixed correct C presets (blink, no-clock bug, poll-and-drive) step line
+    by line against the model. Deliberately no free-form C editing to avoid
+    teaching wrong idioms. Follow-up: USART2 + SysTick, real ISR through
+    bench toolchain.                                                    [impact: H]
+N5  Interrupt/vector-table visualizer: animated reset sequence walking
+    vector table -> _estack -> Reset_Handler -> .data copy -> .bss clear ->
+    main, synced to the existing startup stage of F10.               [impact: M]
+N6  Cross-topic full-text search over notes + lenses + interview answers
+    (build an in-memory index at startup; 163 topics is trivial).     [impact: M]
+N7  Note-linking: [[topic code]] mentions inside notes become navigable
+    links and feed a new "mentioned in notes" edge type in the graph —
+    the edges() mention-extractor already scans topic prose.          [impact: M]
+N8  Per-stage checkpoint quizzes with mastery badges; gate stage
+    completion in mosaic/dashboard on passing, not just marking topics. [impact: M]
+N9  Export notes to a single study-guide Markdown file (or printable PDF via
+    a print stylesheet) — "Copy all notes" already exists as text.   [impact: M]
+N10 Tauri updater plugin + GitHub Releases pipeline so installs self-update;
+    pairs with I5.                                                   [impact: M]
+N11 Multi-window study mode: second Tauri window as recall-card/quiz pane
+    beside the roadmap (API already supports view/topic navigation).  [impact: L]
+N12 Mobile companion via Tauri 2 iOS/Android targets; same frontend, plus
+    backup/import path that works without a filesystem (share sheet). [impact: L]
+
+5b. EXTERNAL BLUEPRINT HARVEST (2026-09-26)
+--------------------------------------------------------------------------------
+A user-supplied "design blueprint" was triaged against this codebase. Its
+"three synced views", staged NVIC/RMW teaching and local-compiler bridge are
+ALREADY implemented (F25 v1.2 / F21-F22 / F24). Its React+Monaco+GSAP stack,
+Renode/QEMU integration and a WebSocket localhost agent were REJECTED
+(zero-dependency offline single file; Tauri IPC already is the secure local
+agent). Free-form C in the peripheral playground stays out ("no wrong info"
+rule); free coding lives in F22 bench mode against the real compiler.
+Harvested candidates, ranked cheap -> ambitious:
+N13 [DONE — F25 v1.3] Interrupt timeline swim lanes (main + per-ISR lanes,
+    preemption visible) in stage 7 from existing cpu.stack/fired state.
+N14 [DONE — F25 v1.3] Draggable ARR/CCR lines over the timer waveform with
+    live duty% and LED dimming (stage 5). Purely visual CCR — do NOT model a
+    real PWM output channel yet.
+N15 [DONE — F25 v1.3] GPIO pin-internals diagram (P-MOS/N-MOS, pull-ups,
+    Schmitt trigger; push-pull vs open-drain, floating vs pulled input) in
+    stage 3.
+N16 volatile break-it demo: compile the same polling loop -O0 vs -O2 in
+    bench mode and show the cached-in-register disassembly. Real compiler,
+    real proof. Requires per-file bench slots for the two opt levels.  [impact: H]
+N17 Protocol logic-analyzer tab (UART frame animator -> SPI CPOL/CPHA grid ->
+    I2C bus), sibling to Peripherals, reusing waveform/log rendering. The
+    biggest unclaimed prize; multi-session build -- IN PROGRESS v1.4 (F25): Protocols view shipped (prLA logic-analyser + Signals 101 line physics: push-pull/open-drain/input x pull, floating, wired-AND + UART frame/sampling/baud-mismatch/terminal); SPI/I2C still TODO.                      [impact: H]
+N18 Auto-grade challenges on the EVENT STREAM ("PA5 toggled at 2 Hz, no
+    busy-wait") rather than register snapshots; extends stage 9 grading.
+                                                                     [impact: M]
+N19 Surface stage-goal checkmarks (periph goals{} state) on the dashboard
+    as a mini skill-tree + badges ("Race Condition Hunter").          [impact: M]
+Deferred (blueprint phases 3-4, not tracked here): time-travel scrubbing,
+Renode, hardware flashing, CAN, RTOS visuals.
+
+6. RECOMMENDED NEXT MILESTONE (v1.1)
+--------------------------------------------------------------------------------
+  1. I1  automated roadmap->src build sync        DONE (npm run build:roadmap)
+  2. I3  native save/open + autosnapshot backup    open
+  3. I4  unit tests for the pure logic             Rust side DONE (9 tests);
+                                                    JS-side model tests open
+  4. I10 fault + interview content scaling         open
+  5. N2  live toolchain (Compilation Path)         DONE
+  6. N3  linker-script sandbox                     DONE
+  7. N4  peripheral playground                      DONE
+  Green track afterward: I2/CSP hardening alongside the sidecar/flag-escape
+  ideas as the flagship v2.0 direction.
+
+================================================================================
+END OF REPORT

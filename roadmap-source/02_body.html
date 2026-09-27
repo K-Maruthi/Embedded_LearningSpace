@@ -1,0 +1,343 @@
+<div class="view" id="view-roadmap">
+<section class="hero"><div class="wrap hero-grid">
+  <div class="mmap" aria-label="Typical microcontroller memory map">
+    <div class="mmap-head"><span>address</span><span>region</span></div>
+    <div id="mmap-body"></div>
+    <div class="mmap-foot">Pick a region to see every topic that lives there.</div>
+  </div>
+  <div class="lede">
+    <h2>Learn C the way the machine runs it</h2>
+    <p><span id="tcount">0</span> topics, ordered from what a bit is to how an ECU survives a
+       missed deadline. Nothing here is explained only as syntax. Every topic is taken
+       apart through the same questions: what the idea is, what the
+       <strong>compiler</strong> does with it, what the <strong>linker</strong> does with it,
+       where it <strong>sits in memory</strong>, what happens at <strong>run time</strong>,
+       what the <strong>CPU and the hardware</strong> actually see, and how it
+       <strong>bites you</strong> on real silicon.</p>
+    <p>Work top to bottom, or pick one lens and read it across every topic —
+       reading "in memory" end to end is a different education from reading "at compile time"
+       end to end. Take notes on any topic, bookmark what you want to come back to, and watch
+       the mosaic fill in.</p>
+    <div class="lenses" id="lenslegend"></div>
+    <p class="lens-note" id="lensnote">All lenses shown. Select one to read a single
+       lens across the whole roadmap; select it again to go back.</p>
+  </div>
+</div></section>
+
+<nav class="stagenav"><div class="wrap in" id="stagenav"></div></nav>
+<main class="wrap" id="stages"></main>
+</div>
+
+<div class="view" id="view-dash" hidden><div class="wrap dash">
+  <div class="dash-lede">
+    <div>
+      <h2>Where you are</h2>
+      <p>Everything here comes from what you marked as learned, bookmarked and wrote notes on.
+         Nothing is inferred.</p>
+    </div>
+  </div>
+  <div class="dashgrid">
+    <div class="panel">
+      <h3>topics learned</h3>
+      <div class="bigstat" id="d-count">0<small id="d-of">of 0</small></div>
+      <div class="substat" id="d-sub"></div>
+    </div>
+    <div class="panel w8">
+      <h3>progress by stage</h3>
+      <div id="d-stages"></div>
+    </div>
+    <div class="panel w8">
+      <h3>last 30 days</h3>
+      <div class="heat" id="d-heat"></div>
+      <div class="heatkey" id="d-heatkey"></div>
+    </div>
+    <div class="panel">
+      <h3>notes and bookmarks</h3>
+      <div class="substat" id="d-writing"></div>
+      <div class="panelbtns">
+        <button type="button" id="d-copynotes">Copy all notes</button>
+        <button type="button" id="d-copyprog">Copy progress</button>
+      </div>
+    </div>
+    <div class="panel w6">
+      <h3>ready to start</h3>
+      <ul class="list" id="d-next"></ul>
+    </div>
+    <div class="panel w6">
+      <h3>bookmarked</h3>
+      <ul class="list" id="d-marks"></ul>
+    </div>
+    <div class="panel w6">
+      <h3>your notes</h3>
+      <ul class="list" id="d-notes" style="max-height:250px"></ul>
+    </div>
+    <div class="panel w6">
+      <h3>practice</h3>
+      <div class="substat" id="d-practice"></div>
+      <div class="panelbtns">
+        <button type="button" data-goto="interview">Open interview prep</button>
+        <button type="button" data-goto="faults">Open fault triage</button>
+      </div>
+    </div>
+  </div>
+</div></div>
+
+<div class="view" id="view-mosaic" hidden><div class="wrap mos">
+  <div class="mos-lede">
+    <h2>The die underneath</h2>
+    <p>One puzzle piece per topic, laid out in roadmap order. Each topic you mark as learned lifts
+       its piece and shows what is beneath: the floorplan of the thing all of this is really about.
+       Finish the roadmap and you get the whole die.</p>
+  </div>
+  <div class="mosbar">
+    <span class="n" id="m-count"></span>
+    <button class="btn" type="button" id="m-peek">Peek at the full picture</button>
+  </div>
+  <div class="mosframe" id="mosframe">
+    <div class="mostip" id="mostip"></div>
+  </div>
+  <p class="mosdone" id="m-done"></p>
+</div></div>
+
+
+<div class="view" id="view-graph" hidden><div class="wrap graphview">
+  <div class="graph-lede">
+    <h2>Failure-mode constellation</h2>
+    <p>The roadmap shows what to learn first. This view shows what tends to fail together. Follow prerequisite arrows for build-up, or switch on cross-links to see the same bug pattern reappear in different parts of the system.</p>
+  </div>
+  <div class="gtoolbar" aria-label="Graph controls">
+    <div><span class="glabel">edges</span><div class="gcontrols" id="gkinds"></div></div>
+    <div><span class="glabel">layout</span><div class="gcontrols" id="gmodes"></div></div>
+    <button class="btn graph-reset" type="button" id="g-reheat">Reset layout</button>
+  </div>
+  <div class="gclusters" id="gclusters"></div>
+  <p class="gblurb" id="gblurb">Press <b>Reset layout</b> once to arrange the constellation. Then drag, zoom, or select a topic. No topic is selected initially.</p>
+  <div class="graphgrid">
+    <div class="gframe" id="gframe"><div class="gtip" id="gtip"></div></div>
+    <aside class="gpanel" id="gpanel" aria-live="polite"></aside>
+  </div>
+</div></div>
+
+
+
+<div class="view" id="view-compile" hidden><div class="wrap complab">
+  <div class="complab-lede">
+    <div class="eyebrow">Compilation Path</div>
+    <h2>From C source to machine code</h2>
+    <p>Follow one small Cortex-M example through preprocessing, compilation, assembly, linking, and image generation. Each stage changes what the program means to the next tool.</p>
+    <div id="complab-toolchain" class="clab-chipwrap"></div>
+  </div>
+  <div class="complab-progress" id="complab-progress" role="tablist" aria-label="Compilation path stages">
+    <button type="button" data-compile-stage="source" role="tab">1. Source</button>
+    <button type="button" data-compile-stage="preprocess" role="tab">2. Preprocess</button>
+    <button type="button" data-compile-stage="compile" role="tab">3. Compile</button>
+    <button type="button" data-compile-stage="assemble" role="tab">4. Assemble</button>
+    <button type="button" data-compile-stage="object" role="tab">5. Object</button>
+    <button type="button" data-compile-stage="link" role="tab">6. Link</button>
+    <button type="button" data-compile-stage="image" role="tab">7. Image</button>
+    <button type="button" data-compile-stage="check" role="tab">8. Check</button>
+  </div>
+  <section class="complab-stage" id="complab-stage" aria-live="polite"></section>
+</div></div>
+
+<div class="view" id="view-playground" hidden><div class="wrap linklab">
+  <div class="linklab-lede">
+    <div class="eyebrow">Linker &amp; Startup Lab</div>
+    <h2>From Cortex-M memory requirements to a working firmware image</h2>
+    <p>We will build one Cortex-M4 firmware model from its memory map through the linker script, final layout, and reset startup.</p>
+  </div>
+
+  <div class="linklab-progress" id="linklab-progress" role="tablist" aria-label="Linker lab stages">
+    <button type="button" data-link-stage="mcu" role="tab">1. MCU</button>
+    <button type="button" data-link-stage="files" role="tab">2. Files</button>
+    <button type="button" data-link-stage="script" role="tab">3. Script</button>
+    <button type="button" data-link-stage="memory" role="tab">4. Memory</button>
+    <button type="button" data-link-stage="startup" role="tab">5. Startup</button>
+    <button type="button" data-link-stage="build" role="tab">6. Build</button>
+    <button type="button" data-link-stage="check" role="tab">7. Check</button>
+    <button type="button" data-link-stage="sandbox" role="tab">8. Sandbox</button>
+  </div>
+
+  <section class="linklab-stage" id="linklab-stage" aria-live="polite"></section>
+
+</div></div>
+
+<div class="view" id="view-periph" hidden><div class="wrap periplab">
+  <div class="periplab-lede">
+    <div class="eyebrow">Peripheral Playground</div>
+    <h2>Ten stages from &ldquo;what is a register&rdquo; to interrupts that preempt each other</h2>
+    <p>Work the stages in order &mdash; each one gives you only the registers it teaches, and ends in a goal the model <em>grades against live register state</em>. Behind every bit you flip there is hardware you can watch: the pin&rsquo;s MOSFET cell, the counter&rsquo;s waveform with a draggable ARR line, and a swim-lane timeline of who owns the CPU. Or jump to stage 10, the full playground with fixed, correct preset programs. Nothing here is guesswork: the model is small and honest about the simplifications it makes.</p>
+  </div>
+  <div id="periplab-body"></div>
+</div></div>
+
+<div class="view" id="view-protocols" hidden><div class="wrap prolab">
+  <div class="prolab-lede">
+    <div class="eyebrow">Protocol Lab</div>
+    <h2>How bits actually travel a wire</h2>
+    <p>Registers decide a voltage; protocols are what a second device <em>infers</em> from that voltage over time. This module starts at the physics &mdash; push-pull vs open-drain, pull-up resistors, a floating line &mdash; then climbs into UART: a logic-analyzer view that decodes a byte into its frame, and a receiver that samples it. Everything is a live model on the same idea as the Peripherals tab: watch the signal, read the code it equals.</p>
+  </div>
+  <div id="prolab-body"></div>
+</div></div>
+
+<div class="view" id="view-practice" hidden><div class="wrap">
+  <nav class="subnav" id="pv-subnav">
+    <button type="button" data-sv="interview" aria-current="true">Interview prep</button>
+    <button type="button" data-sv="lab">Memory-map lab</button>
+    <button type="button" data-sv="linker">Linker &amp; startup</button>
+    <button type="button" data-sv="faults">Fault triage</button>
+    <button type="button" data-sv="tools">C tools</button>
+  </nav>
+
+  <div class="subview" id="sv-interview">
+    <div class="pv-lede">
+      <h2>Interview prep</h2>
+      <p>Pick a track and a level. Answer in your own words if you want the practice, then reveal the
+         rubric and check off what your answer actually covered. Nothing here is auto-graded — the
+         value is in seeing which lens you consistently skip.</p>
+    </div>
+    <div class="ivcov" id="iv-cov"></div>
+    <div class="ivbar">
+      <select id="iv-track"><option value="">all tracks</option></select>
+      <select id="iv-level"><option value="">all levels</option></select>
+      <select id="iv-format"><option value="">all formats</option></select>
+      <button class="btn" type="button" id="iv-mock">Start mock round</button>
+      <span class="ivtimer" id="iv-timer" hidden></span>
+    </div>
+    <div class="ivgrid">
+      <div class="ivlist" id="iv-list"></div>
+      <div>
+        <div class="ivcard" id="iv-card"></div>
+        <div class="ivreport" id="iv-report" hidden></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="subview" id="sv-lab" hidden>
+    <div class="pv-lede">
+      <h2>Memory-map lab</h2>
+      <p>Type a declaration and drop it in. This is a simplified teaching model, not a real compiler —
+         it applies storage duration, const-ness and initialisation rules to show where the object lives.
+         Declarations without <code>auto</code>/<code>register</code> are treated as file-scope; explicit automatic
+         objects such as <code>auto int x = 0;</code> are shown in the runtime stack.</p>
+    </div>
+    <div class="labgrid">
+      <div>
+        <div class="lab-examples" id="lab-examples"></div>
+        <div class="lab-row">
+          <input id="lab-src" type="text" placeholder="const char msg[] = &quot;brake fault&quot;;">
+          <button class="btn" type="button" id="lab-add">Drop it in</button>
+        </div>
+        <p class="lab-err" id="lab-err"></p>
+        <ul class="lab-list" id="lab-list"></ul>
+        <button class="btn" type="button" id="lab-reset">Reset</button>
+      </div>
+      <div class="lab-viz">
+        <div class="lab-region" data-r="text"><div class="hd"><span>.text</span><span id="lr-text-sz">code size unknown</span></div><div class="items" id="lr-text"></div></div>
+        <div class="lab-region" data-r="rodata"><div class="hd"><span>.rodata</span><span id="lr-rodata-sz">0 B</span></div><div class="items" id="lr-rodata"></div></div>
+        <div class="lab-region" data-r="data"><div class="hd"><span>.data</span><span id="lr-data-sz">0 B</span></div><div class="items" id="lr-data"></div></div>
+        <div class="lab-region" data-r="bss"><div class="hd"><span>.bss</span><span id="lr-bss-sz">0 B</span></div><div class="items" id="lr-bss"></div></div>
+        <div class="lab-region" data-r="stack"><div class="hd"><span>stack</span><span id="lr-stack-sz">0 B</span></div><div class="items" id="lr-stack"></div></div>
+        <div class="lab-totals">
+          <span>Flash: <b id="lab-flash">0</b> B</span>
+          <span>RAM: <b id="lab-ram">0</b> B</span>
+        </div>
+        <p class="lab-note">Function definitions land in .text; this model doesn't estimate code size. The stack is runtime RAM, not an ELF section: automatic objects occupy stack-frame space only while their block is active. The lab's RAM total includes the explicitly modelled stack bytes.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="subview" id="sv-tools" hidden>
+    <div class="pv-lede">
+      <h2>C tools</h2>
+      <p>Small interactive models for the parts of Embedded C that are easiest to understand by manipulating values: integer conversions, bits, shifts, endianness, struct layout, and compiler diffs.</p>
+    </div>
+    <nav class="subnav" id="pg-subnav">
+      <button type="button" data-sv="bitlab" aria-current="true">Bits &amp; layout</button>
+      <button type="button" data-sv="diffs">Compiler diffs</button>
+    </nav>
+
+    <div class="subview" id="pgv-bitlab">
+      <div class="pggrid">
+        <section class="pgpanel">
+          <h3>Integer operation model</h3>
+          <div class="pgrow">
+            <select id="bl-a-type" aria-label="operand A type"></select>
+            <input id="bl-a-val" value="250" aria-label="operand A value">
+            <select id="bl-op" aria-label="operation"><option>+</option><option>-</option><option>*</option><option>&lt;&lt;</option><option>&gt;&gt;</option><option>&amp;</option><option>|</option><option>^</option></select>
+            <select id="bl-b-type" aria-label="operand B type"></select>
+            <input id="bl-b-val" value="10" aria-label="operand B value">
+            <span>→</span><select id="bl-out-type" aria-label="result type"></select>
+            <button class="btn" type="button" id="bl-run">Run</button>
+          </div>
+          <pre class="pgout" id="bl-result"></pre>
+        </section>
+
+        <section class="pgpanel">
+          <h3>Two's complement</h3>
+          <div class="pgrow"><select id="tc-width"><option value="8">8 bit</option><option value="16">16 bit</option><option value="32">32 bit</option></select><input id="tc-val" value="251"><button class="btn" type="button" id="tc-set">Set bits</button></div>
+          <div class="bitrow" id="tc-bits"></div>
+          <pre class="pgout" id="tc-out"></pre>
+        </section>
+
+        <section class="pgpanel">
+          <h3>Shifts</h3>
+          <div class="pgrow"><select id="sh-width"><option value="8">8</option><option value="16">16</option><option value="32">32</option></select><select id="sh-signed"><option value="0">unsigned</option><option value="1">signed</option></select><select id="sh-dir"><option value="l">left</option><option value="r">right</option></select><input id="sh-val" value="-8"><input id="sh-amt" value="2"><button class="btn" type="button" id="sh-run">Shift</button></div>
+          <pre class="pgout" id="sh-out"></pre>
+        </section>
+
+        <section class="pgpanel">
+          <h3>Endianness</h3>
+          <div class="pgrow"><input id="en-val" value="12345678"><button class="btn" type="button" id="en-run">Show bytes</button></div>
+          <div class="pgout" id="en-out"></div>
+        </section>
+
+        <section class="pgpanel">
+          <h3>Struct layout</h3>
+          <div id="st-members"></div>
+          <button class="btn" type="button" id="st-add">Add member</button>
+          <div id="st-out"></div>
+        </section>
+
+        <section class="pgpanel">
+          <h3>Register bit decoder</h3>
+          <div class="pgrow"><select id="rg-preset"><option value="cfsr">CFSR</option><option value="custom">Custom</option></select><input id="rg-val" value="00000200"><button class="btn" type="button" id="rg-run">Decode</button></div>
+          <div id="rg-custom" hidden><div id="rg-custom-list"></div><button class="btn" type="button" id="rg-custom-add">Add bit</button></div>
+          <pre class="pgout" id="rg-out"></pre>
+        </section>
+      </div>
+    </div>
+
+    <div class="subview" id="pgv-diffs" hidden>
+      <div class="pv-lede"><h3>Compiler diffs</h3><p>Compare small C changes and inspect the resulting semantic or implementation difference.</p></div>
+      <div id="diffs-list"></div>
+    </div>
+
+  </div>
+
+  <div class="subview" id="sv-faults" hidden>
+    <div class="pv-lede">
+      <h2>Fault triage</h2>
+      <p>A register dump, a short context, four options. This is the actual job: reading CFSR, knowing
+         which register answers which question, and telling a real fault apart from a watchdog reset.</p>
+    </div>
+    <div class="faultbar">
+      <span><b id="ft-score">0</b> / <span id="ft-attempted">0</span> correct this session</span>
+      <span id="ft-pos"></span>
+    </div>
+    <div class="faultcard" id="ft-card"></div>
+    <div class="faultnav">
+      <button class="btn" type="button" id="ft-next">Next scenario</button>
+      <button class="btn" type="button" id="ft-restart">Restart / reshuffle</button>
+    </div>
+  </div>
+</div></div>
+
+<footer class="foot"><div class="wrap">
+  <div class="hr" style="margin-bottom:22px"></div>
+  <p>Progress, notes, bookmarks, interview answers and fault-practice state are stored locally on this device.
+     Use the <strong>Export data</strong> button in the top bar to save one JSON backup for the entire roadmap,
+     or <strong>Import data</strong> to restore that backup on another device or browser.
+     <code>EmbeddedCRoadmap.exportAll()</code> and <code>importAll(obj)</code> expose the same global state API.
+     <code>EmbeddedCRoadmap.data</code>, <code>.edges()</code> and <code>.cards()</code> feed the graph and flashcard deck.</p>
+</div></footer>

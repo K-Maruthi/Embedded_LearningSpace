@@ -1,0 +1,9 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the Embedded C Learning Space desktop window",
+  "windows": ["main"],
+  "permissions": [
+    "core:default"
+  ]
+}

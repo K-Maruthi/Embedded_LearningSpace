@@ -1,0 +1,357 @@
+🧩 Embedded Learning Space: Design Blueprint
+
+This covers **(1)** how to structure each topic, **(2)** visualization ideas per peripheral, ISR, and protocol, **(3)** playground architecture using the user's local ARM compiler, and **(4)** an MVP roadmap.
+
+---
+
+## 1. Core Philosophy: "Three Synced Views"
+
+The main idea for your platform: **every concept is shown in three layers at the same time, all linked.**
+
+```
+┌─────────────────┬─────────────────┬─────────────────┐
+│  🔌 HARDWARE     │  📋 REGISTER     │  💻 CODE         │
+│  VIEW            │  VIEW            │  VIEW            │
+│                  │                  │                  │
+│  Animated pins,  │  Live bit-fields │  C source with   │
+│  wires, signals, │  (clickable,     │  the current     │
+│  waveforms       │  color-coded)    │  line highlighted│
+└─────────────────┴─────────────────┴─────────────────┘
+         ▲                  ▲                  ▲
+         └──────── one shared event stream ────┘
+```
+
+- When the user **flips a bit** in the register view, the pin changes in the hardware view and the equivalent C line appears in the code view.
+- When the user **runs code**, the register bits flash as they're written and the waveform updates.
+- This bridges the biggest gap beginners have: *"How does `GPIOA->ODR |= (1<<5)` actually turn on an LED?"*
+
+---
+
+## 2. Module Template (Same for Every Topic)
+
+Keep a consistent learning flow so users know what to expect:
+
+| Step | Name | What happens |
+|---|---|---|
+| 1 | **Story / Analogy** | 30-second intro (e.g., "UART is two people agreeing on talking speed beforehand") |
+| 2 | **Explore (no code)** | Interactive animation with sliders and toggles |
+| 3 | **Register Deep-Dive** | Clickable register map, with a datasheet excerpt per bit |
+| 4 | **Guided Code** | Step-through code with the three synced views |
+| 5 | **Playground** | Free coding, compiled with the local ARM toolchain |
+| 6 | **Break It!** | Fault injection: wrong baud, missing `volatile`, priority inversion |
+| 7 | **Challenge** | Auto-graded task ("Generate 1 kHz PWM at 25% duty") |
+| 8 | **Quiz / Recap** | Quick check, then unlock the next node in the skill tree |
+
+---
+
+## 3. Visualization Ideas per Topic
+
+### 🔧 Foundations (don't skip these, they make everything else click)
+
+**Memory Map Explorer**
+- Vertical zoomable bar: Flash → SRAM → Peripherals → System (0xE000_0000).
+- Click a region to zoom into peripheral blocks and see individual registers.
+- After compiling, overlay the user's `.text`, `.data`, `.bss`, stack, and heap using the `.map` file and `arm-none-eabi-size`.
+- Animate **stack growing down and heap growing up**, and show the collision when they meet.
+
+**Boot Sequence Animation**
+```
+Reset → Read SP from 0x0000_0000 → Read PC from 0x0000_0004
+      → Reset_Handler → copy .data (Flash→RAM) → zero .bss
+      → SystemInit() → main()
+```
+- Show bytes physically "flying" from Flash to RAM during the `.data` copy.
+- Users can step through the actual `startup.s` line by line.
+
+**Clock Tree (CubeMX-style, but educational)**
+- Interactive tree: HSI/HSE → PLL (M, N, P dividers) → SYSCLK → AHB → APB1/APB2 → peripherals.
+- Change a divider and the frequencies propagate with an animated "flow."
+- Show a red warning when limits are exceeded ("APB1 max is 42 MHz!").
+- Link each peripheral lesson back to this ("Your UART baud depends on PCLK1, shown here").
+
+---
+
+### 💡 GPIO
+
+- **Pin internals diagram:** an animated schematic of the output driver (P-MOS/N-MOS), pull-up/pull-down resistors, and Schmitt trigger.
+  - Toggle **Push-Pull vs Open-Drain** and watch the current-flow animation change.
+  - Toggle a pull-up and see a floating input (random flicker) become stable.
+- **Register bits:** MODER, OTYPER, PUPDR, ODR, IDR, and BSRR as clickable bit grids.
+- **BSRR vs ODR read-modify-write demo:** show a race condition when an ISR interrupts a `|=` operation. This is a great "aha" moment.
+- **Button debouncing:** show a bouncy signal on a mini oscilloscope and let users adjust the debounce time.
+
+### ⏱️ Timers and PWM
+
+- **Counter visualization:** an animated sawtooth (up-count), triangle (center-aligned), or reverse sawtooth (down-count).
+- Horizontal lines for **ARR** (period) and **CCR** (compare) that are draggable.
+- As the user drags CCR, the PWM output waveform below updates live, and a virtual **LED dims** or a **servo rotates**.
+- Formula panel that updates live:
+  `f_PWM = f_TIM / ((PSC+1) × (ARR+1))`
+- Show the **Input Capture** mode: measure an incoming signal's frequency, with the counter value "snapshotted" on each edge.
+
+### 📈 ADC
+
+- Continuous analog waveform (sine, or a potentiometer the user drags).
+- Sampling points appear as dots, then a staircase quantized output.
+- Sliders:
+  - **Resolution** (6/8/10/12-bit): watch the steps get finer.
+  - **Sampling rate:** drop it below Nyquist to show **aliasing** (a very powerful visual).
+  - **Sample time:** show the RC charging curve of the sample-and-hold capacitor.
+- Show the conversion value both in binary and scaled to volts.
+
+### 🔄 DMA
+
+- Split-screen comparison:
+  - **Left:** CPU copying data byte by byte (CPU busy meter at 100%).
+  - **Right:** DMA moving data as particles while the CPU is free (the CPU animates doing "other work").
+- Show half-transfer and transfer-complete interrupts firing.
+- Circular buffer mode as a ring animation (great for ADC + DMA).
+
+---
+
+### ⚡ Interrupts and NVIC (the flagship section)
+
+This deserves the richest visualizations, because it is where most learners struggle.
+
+**1. Interrupt Timeline**
+```
+Main   ████████░░░░░░░░░░░░████████████░░░░░░████
+TIM2 ISR       ████████████
+UART ISR           (pending...)  ██████
+EXTI ISR                                ██████
+         ↑ preempted  ↑ tail-chained
+```
+- Horizontal swim lanes per context, with time on the X-axis.
+- Users trigger interrupts manually (buttons) or via code.
+- Label the key behaviors: **preemption**, **tail-chaining**, **late arrival**, and **pending**.
+
+**2. Exception Entry: Stack Frame Animation**
+- Show registers **R0–R3, R12, LR, PC, xPSR** being pushed onto the stack one by one.
+- Show LR becoming `EXC_RETURN` (0xFFFFFFF9, and so on) with an explanation.
+- Show the vector table lookup: `IRQn → offset → handler address → jump`.
+- Show a cycle counter for **latency** (12 cycles on Cortex-M3/M4).
+
+**3. NVIC Priority Playground**
+- Configure priorities and the priority grouping (preempt vs subpriority bits).
+- Fire multiple IRQs at once and predict the execution order, then watch it happen.
+- **Quiz mode:** "Which ISR runs first?"
+
+**4. "Break It" Scenarios**
+- Missing `volatile`: the main loop never sees the flag change, and the user sees why in the disassembly (the value is cached in a register).
+- Long ISR: other interrupts are starved or missed.
+- Forgetting to clear the pending flag: the ISR fires forever.
+- Shared variable without a critical section: a corrupted counter.
+
+---
+
+### 📡 Communication Protocols
+
+Use a common **Logic Analyzer component** across all protocols (like a mini Saleae), with a protocol decoder overlay.
+
+**UART**
+- Animate a bit frame: `[Start][D0..D7][Parity][Stop]`, with bits traveling along a wire.
+- Adjust baud rate, data bits, parity, and stop bits.
+- **Baud mismatch demo:** the receiver samples at the wrong times, shown with sample-point markers drifting off center and garbage characters appearing.
+- A virtual serial terminal where users type and watch the frames.
+
+**SPI**
+- Four lines: SCK, MOSI, MISO, CS.
+- **CPOL/CPHA 2×2 grid:** all 4 modes side by side, highlighting the sampling edge.
+- **Shift register ring animation:** master and slave registers form a loop, and bits rotate so the data is *exchanged* (a key insight many miss).
+- Multiple slaves with CS selection.
+
+**I²C**
+- Open-drain bus with pull-up resistors (link back to the GPIO lesson).
+- Animate START and STOP conditions (SDA changes while SCL is high).
+- Frame breakdown: `[S][Addr 7b][R/W][ACK][Data][ACK]...[P]`.
+- Virtual devices on the bus (EEPROM, temperature sensor, OLED) that respond.
+- Advanced demos: **clock stretching**, **arbitration** (two masters), a **NACK** from a wrong address, and **bus lockup** recovery.
+
+**CAN (advanced)**
+- Differential signaling (CANH/CANL).
+- **Bitwise arbitration animation:** three nodes transmit at once, and dominant bits win, so the lowest ID wins.
+- Bit stuffing visualization (a stuffed bit is inserted after 5 identical bits).
+- Error frames and error counters (TEC/REC) leading to bus-off.
+
+**Others to add later:** 1-Wire, USB (enumeration flow), Ethernet basics.
+
+---
+
+### 🧵 RTOS Section (later phase)
+
+- Task state diagram (Ready / Running / Blocked / Suspended) with live transitions.
+- Scheduler timeline, similar to the ISR timeline.
+- **Priority inversion demo** (the Mars Pathfinder story!) and how mutex priority inheritance fixes it.
+- Queues shown as animated boxes moving between tasks.
+
+---
+
+## 4. Playground Architecture (Using the Local ARM Compiler)
+
+### The key challenge
+A browser **cannot directly execute** a local `arm-none-eabi-gcc` or `armclang`. You need a **local bridge**.
+
+### Recommended architecture
+
+```
+┌──────────────────── Browser (Web App) ─────────────────────┐
+│  Monaco Editor │ Virtual Board │ Logic Analyzer │ Reg View │
+└───────────────┬─────────────────────────────────────────────┘
+                │ WebSocket (localhost:PORT + auth token)
+┌───────────────▼──────── Local Agent (Go / Rust / Node) ────┐
+│  • Detects the toolchain (arm-none-eabi-gcc / armclang)     │
+│  • Compiles → .elf, .map, .lst, size report                 │
+│  • Runs the simulator OR flashes real hardware              │
+│  • Streams events back to the browser                       │
+└───────┬───────────────────────┬─────────────────────────────┘
+        │                       │
+┌───────▼────────┐     ┌────────▼────────────────┐
+│  SIMULATOR     │     │  REAL HARDWARE (opt.)   │
+│  Renode / QEMU │     │  OpenOCD / pyOCD        │
+│  (peripheral   │     │  + SWO/ITM trace        │
+│   hooks)       │     │  + WebSerial for UART   │
+└────────────────┘     └─────────────────────────┘
+```
+
+### Options for the local agent
+| Option | Pros | Cons |
+|---|---|---|
+| **Tauri desktop app** | Small, secure, native access | Users must install it |
+| **Node/Go CLI daemon** | Simple (`npx embedlab-agent`) | Needs a terminal |
+| **VS Code extension** | Devs already use VS Code | Ties you to VS Code |
+
+### Simulator choice
+| Simulator | Best for |
+|---|---|
+| **Renode** ⭐ | Best STM32/nRF peripheral models, scriptable, can hook register access and emit events |
+| **QEMU** | Fast CPU emulation, but limited peripheral support |
+| **Unicorn Engine (WASM)** + custom JS peripheral models | Runs *fully in the browser*, gives full control over visuals |
+
+**Suggestion:** use **Renode** for realistic full-board runs. Consider a **lightweight custom simulator** (Unicorn plus your own JS peripheral models) for the guided lessons, where you need precise, controllable, animatable behavior.
+
+### Event stream format (what drives all the animations)
+
+The simulator emits events and every visual component subscribes to them:
+
+```json
+{ "t": 12450, "type": "reg_write", "periph": "GPIOA", "reg": "ODR", "addr": "0x40020014", "value": "0x00000020" }
+{ "t": 12451, "type": "pin_change", "pin": "PA5", "level": 1 }
+{ "t": 15000, "type": "irq_enter", "irq": "TIM2_IRQn", "priority": 2, "stacked": {"R0":"0x0", "PC":"0x08000232"} }
+{ "t": 15040, "type": "irq_exit",  "irq": "TIM2_IRQn", "tail_chain": false }
+{ "t": 16000, "type": "uart_tx", "instance": "USART2", "byte": "0x48" }
+{ "t": 16010, "type": "src_line", "file": "main.c", "line": 42 }
+```
+
+- Use DWARF debug info from the `.elf` (via `addr2line` or a DWARF parser) to map the PC to a source line, which powers the code-view highlighting.
+- Record everything, then allow **time-travel scrubbing** (rewind execution with a slider). This is a huge learning feature.
+
+### Compile output views (free value from the toolchain)
+- **Disassembly view:** C line ↔ assembly side by side (`objdump -S`).
+- **Size report:** a Flash/RAM usage bar chart.
+- **Optimization comparison:** compile with `-O0` vs `-O2` and diff the assembly. This is great for explaining `volatile`.
+- **Compiler errors:** parse and show them inline in Monaco.
+
+### ⚠️ Security note for the local agent
+- Bind to `127.0.0.1` only.
+- Check the `Origin` header (allow only your domain).
+- Use a pairing token (shown once in the agent and pasted into the web app).
+- Sandbox the build directory, and never execute arbitrary shell commands from the web.
+
+---
+
+## 5. Virtual Board and Components
+
+Build a **drag-and-drop breadboard** in the playground:
+
+- **MCU board:** start with one popular board (e.g., an **STM32F4 Nucleo** or **Blue Pill**) with an accurate pinout.
+- **Components:** LED, RGB LED, button, potentiometer, buzzer, servo, 7-segment display, SSD1306 OLED (I²C), MPU6050 (I²C), SPI flash, UART GPS module.
+- **Instruments:** logic analyzer, oscilloscope, serial monitor, and a multimeter probe.
+- Each component is a small JS model that reacts to pin and bus events.
+
+---
+
+## 6. Challenges and Auto-Grading
+
+Grade by **observing behavior** through the event stream, not by comparing code:
+
+```yaml
+challenge: "Blink PA5 at 2 Hz using TIM2 interrupt"
+assertions:
+  - pin: PA5
+    frequency: { target: 2, tolerance: 2% }
+  - irq_used: TIM2_IRQn
+  - forbidden: ["HAL_Delay", "busy_loop_detected"]
+```
+
+**Challenge ideas:**
+- 🔦 "Knight Rider" LED chase using timers.
+- 🎵 Play a melody on a buzzer with PWM.
+- 🌡️ Read an I²C temperature sensor and print it over UART.
+- 🐛 **Bug hunts:** here's broken code; find why the ISR never fires.
+- ⚡ **Optimization:** reduce ISR latency or code size below X bytes.
+
+---
+
+## 7. Engagement Layer
+
+- **Skill tree** (game-style): GPIO → Timers → Interrupts → UART → DMA → RTOS...
+- **Badges:** "Interrupt Tamer," "Bus Master (I²C)," "Race Condition Hunter."
+- **"Explain Mode" toggle** on any visualization: an overlay with annotations.
+- **Cheat sheets** auto-generated per module (register summary plus code snippets).
+- **Hardware mode:** "Now try it on your real board!", flashing via the local agent.
+
+---
+
+## 8. Suggested Tech Stack
+
+| Layer | Tools |
+|---|---|
+| Frontend | React / Svelte + TypeScript |
+| Editor | Monaco Editor (C syntax, error markers) |
+| Waveforms / logic analyzer | Canvas / WebGL (for performance), **WaveDrom** for static timing diagrams |
+| Diagrams / animations | SVG + **Framer Motion** / GSAP, **Rive** for rich interactive animations |
+| Data viz | D3.js (memory maps, clock trees) |
+| Local agent | **Go** or **Rust** (single binary, easy install) or Tauri |
+| Simulation | Renode + custom peripheral hooks, or Unicorn (WASM) |
+| Hardware | OpenOCD / pyOCD, WebSerial API |
+
+---
+
+## 9. MVP Roadmap
+
+**Phase 1: Foundation (MVP)**
+- Local agent: detect the toolchain, compile, return `.elf`, `.map`, and errors.
+- One board (STM32F4) in the simulator.
+- Modules: **Memory Map, GPIO, Timers/PWM, basic NVIC timeline**.
+- Three synced views plus a basic logic analyzer.
+
+**Phase 2: Protocols**
+- UART, SPI, I²C with decoders and virtual devices.
+- Challenges with auto-grading.
+- Disassembly and `-O0` vs `-O2` comparison.
+
+**Phase 3: Depth**
+- DMA, ADC, clock tree, exception stack-frame animation.
+- Time-travel debugging.
+- Real hardware flashing and SWO trace.
+
+**Phase 4: Advanced**
+- CAN, RTOS, low-power modes, bootloaders.
+- Community challenges and shared projects.
+
+---
+
+## 🎯 Top 5 "Wow" Features to Prioritize
+1. **Three synced views** (hardware ↔ register ↔ code)
+2. **Interrupt timeline** with preemption and tail-chaining
+3. **Time-travel scrubbing** through execution
+4. **"Break It" mode** with fault injection
+5. **Logic analyzer with protocol decoding** on the user's own compiled code
+
+---
+
+I can go deeper on any part next, for example:
+- a **detailed local agent design** (API endpoints plus sample Go/Node code),
+- **UI wireframes** for a specific module (like the NVIC or I²C page),
+- how to **hook Renode** to emit the register and IRQ events, or
+- a **full lesson script** for one topic.
