@@ -39,7 +39,11 @@ const env = {
   wr: (k, v) => { store[k] = JSON.stringify(v); },
   Math: Math, Object: Object, JSON: JSON, String: String, Number: Number, Array: Array,
   K_WALK: 'ecroadmap.walk.v1', K_PERIPH: 'ecroadmap.periph.v1', K_PROTOS: 'ecroadmap.protocols.v1',
+  K_JOURNAL: 'ecroadmap.journals.v1',
   LINK_STAGES: LINK_STAGES,
+  /* only the titles are needed, and they are invented here: the point is that a
+     journal is labelled from the lab's own stage metadata, whatever that metadata is */
+  LINK_DATA: LINK_STAGES.reduce((o, k) => { o[k] = { title: 'L ' + k }; return o; }, {}),
   COMPILE_DATA: compileNav.reduce((o, k) => { o[k] = { title: 'x' }; return o; }, {}),
   PF_STAGE_META: Array.from({ length: 10 }, (_, i) => ({ id: i + 1, name: 'P' + (i + 1) })),
   PR_STAGE_META: [
@@ -56,7 +60,7 @@ const env = {
 };
 const M = new Function('env', 'with (env) {\n' + body +
   '\nreturn { mark: walkMark, count: walkCount, seen: walkSeen, goals: storedGoals, ' +
-  'labs: dashLabs, verdict: lksandVerdict, row: labRow };\n}')(env);
+  'labs: dashLabs, verdict: lksandVerdict, row: labRow, jr: jrEntries, jrlabs: jrLabStages };\n}')(env);
 
 let fails = 0, checks = 0;
 function ok(name, cond, extra) {
@@ -90,6 +94,45 @@ store['ecroadmap.protocols.v1'] = JSON.stringify({ stage: 9, goals: { 1: true, 2
 const g = M.goals('ecroadmap.periph.v1', [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 ok('storedGoals counts only truthy verifications of real stages', g.n === 3 && g.stage === 8, g);
 ok('storedGoals survives a missing key', M.goals('ecroadmap.nope.v1', [1, 2]).n === 0);
+
+/* --- journals: the same honesty the progress rows are held to ---
+   A journal is only worth showing if the stage it names still exists and something was
+   actually written. The lists the progress rows divide by and the lists the journals are
+   filtered against have to be the same lists, or one of the two is lying. */
+const gl = M.jrlabs();
+const pfIds = env.PF_STAGE_META.map((s) => s.id), prIds = env.PR_STAGE_META.map((s) => s.id);
+ok('journals are filtered against the very stage lists the progress rows count',
+  JSON.stringify(gl[0].stages) === JSON.stringify(CS) &&
+  JSON.stringify(gl[1].stages) === JSON.stringify(LS) &&
+  JSON.stringify(gl[2].stages) === JSON.stringify(pfIds) &&
+  JSON.stringify(gl[3].stages) === JSON.stringify(prIds),
+  gl.map((x) => x.lab + ':' + x.stages.join('|')));
+ok('every lab that can hold a journal is named for the export',
+  gl.every((g) => g.title && g.name(g.stages[0])), gl.map((g) => g.title));
+
+store['ecroadmap.journals.v1'] = JSON.stringify({
+  'link:script': 'the ORDER line decides placement',
+  'compile:source': '   ',
+  'periph:3': 'duty is CCR over ARR',
+  'protocols:7': 'the protocol map is the point of this stage',
+  'compile:removed-stage': 'written when this stage still existed',
+  'nonsense:key': 'a lab that is not one of the four',
+});
+const jr = M.jr();
+ok('a journal of only whitespace is not something written',
+  jr.filter((e) => e.lab === 'compile').length === 0, jr);
+ok('a journal for a stage that no longer exists is not offered as somewhere to go',
+  jr.every((e) => String(e.stage) !== 'removed-stage'), jr.map((e) => e.lab + ':' + e.stage));
+ok('a key from a lab this build does not know is never read',
+  jr.every((e) => e.lab !== 'nonsense'), jr.map((e) => e.lab));
+ok('the three real journals are all listed', jr.length === 3, jr.map((e) => e.lab + ':' + e.stage));
+ok('they come out in lab order, then the lab\u2019s own stage order',
+  jr.map((e) => e.lab + ':' + e.stage).join() === 'link:script,periph:3,protocols:7',
+  jr.map((e) => e.lab + ':' + e.stage));
+ok('each is labelled with its stage name from the metadata, not its raw id',
+  jr.map((e) => e.name).join() === 'L script,P3,Protocol map', jr.map((e) => e.name));
+ok('and the text itself comes along for the export',
+  /ORDER/.test(jr[0].text), jr[0]);
 
 const html = M.labs();
 ok('one row per bench', (html.match(/class="stagebar labrow"/g) || []).length === 4,

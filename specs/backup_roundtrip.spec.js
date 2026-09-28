@@ -46,7 +46,8 @@ const env = {
   esc: (s) => String(s)
 };
 /* the lab keys are var-declared elsewhere in the file; hand the block their real values */
-['K_DONE', 'K_NOTE', 'K_MARK', 'K_THEME', 'K_IV', 'K_FAULT', 'K_WALK', 'K_BENCH', 'K_LKSAND', 'K_PERIPH', 'K_PROTOS']
+['K_DONE', 'K_NOTE', 'K_MARK', 'K_THEME', 'K_IV', 'K_FAULT', 'K_WALK', 'K_JOURNAL',
+  'K_BENCH', 'K_LKSAND', 'K_PERIPH', 'K_PROTOS']
   .forEach((n) => { env[n] = declared[n]; });
 env.done = {}; env.notes = {}; env.marks = {}; env.ivState = { answers: {} }; env.faultState = { seen: {} };
 
@@ -67,24 +68,27 @@ function drain() { const q = scheduled; scheduled = []; q.forEach((fn) => fn());
 function resetImports() { scheduled = []; reloads = 0; }
 
 /* ---- 1. nothing that persists can be left out of the backup ---- */
-ok('the app declares the storage keys we expect', declaredNames.length >= 11, declaredNames);
+ok('the app declares the storage keys we expect', declaredNames.length >= 12, declaredNames);
 const covered = M.keys().concat(ROADMAP.map((n) => declared[n]));
 const orphans = declaredNames.filter((n) => covered.indexOf(declared[n]) < 0);
 ok('every ecroadmap.* key is either restored in memory or listed in labKeys()', orphans.length === 0, orphans);
-ok('the five lab keys really are in the backup list',
-  ['K_BENCH', 'K_LKSAND', 'K_PERIPH', 'K_PROTOS', 'K_WALK'].every((n) => M.keys().indexOf(declared[n]) >= 0), M.keys());
+ok('the six lab keys really are in the backup list',
+  ['K_BENCH', 'K_LKSAND', 'K_PERIPH', 'K_PROTOS', 'K_WALK', 'K_JOURNAL'].every((n) => M.keys().indexOf(declared[n]) >= 0), M.keys());
 ok('no storage key is listed twice', new Set(covered).size === covered.length, covered);
 
 /* ---- 2. snapshot carries lab state ---- */
 store[declared.K_PERIPH] = JSON.stringify({ stage: 4, goals: { 1: true, 2: true } });
 store[declared.K_WALK] = JSON.stringify({ link: { sandbox: true } });
 store[declared.K_PROTOS] = JSON.stringify({ stage: 9, goals: { 1: true } });
+store[declared.K_JOURNAL] = JSON.stringify({ 'link:script': 'the ORDER line decides placement, not the file order' });
 let snap = M.snap();
 ok('schema is 2 so a backup records that it carries labs', snap.schema === 2, snap.schema);
 ok('snapshot includes the lab keys that have state',
-  Object.keys(snap.state.labs).length === 3 &&
+  Object.keys(snap.state.labs).length === 4 &&
   snap.state.labs[declared.K_PERIPH].goals[2] === true &&
   snap.state.labs[declared.K_WALK].link.sandbox === true, Object.keys(snap.state.labs));
+ok('snapshot includes what was written in the stage journals',
+  /ORDER/.test(snap.state.labs[declared.K_JOURNAL]['link:script']), snap.state.labs[declared.K_JOURNAL]);
 ok('snapshot omits lab keys that were never written',
   !Object.prototype.hasOwnProperty.call(snap.state.labs, declared.K_BENCH), Object.keys(snap.state.labs));
 
@@ -96,6 +100,14 @@ ok('a schema-2 backup restores', M.restore(exported) === true);
 ok('the lab keys come back out of the file',
   JSON.parse(store[declared.K_PERIPH]).goals[2] === true &&
   JSON.parse(store[declared.K_WALK]).link.sandbox === true, Object.keys(store));
+ok('the stage journals come back out of the file too',
+  /ORDER/.test(JSON.parse(store[declared.K_JOURNAL])['link:script']), Object.keys(store));
+/* A journal is lab state. If somebody later adds a "journals" field to the roadmap
+   half of the envelope as well, there are two answers to "what did you write" and the
+   storage one wins on reload - so the envelope's shape is asserted, not just its data. */
+ok('a backup has exactly the sections it should, so journals have one home not two',
+  Object.keys(snap.state).sort().join() === ['done', 'faults', 'interview', 'labs', 'marks', 'notes', 'settings'].join(),
+  Object.keys(snap.state));
 ok('importing lab state reloads, because a running ticker would overwrite it',
   drain() === 1, { reloads: reloads });
 

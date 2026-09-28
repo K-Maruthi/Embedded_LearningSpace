@@ -66,6 +66,24 @@ else {
     if (!subIds.has(m[1])) fail("practice sub-nav button "+m[1]+" has no #sv-"+m[1]+" section");
 }
 
+/* A lab journal only works if four things agree on one name: the renderer that mounts
+   the box, the host element that is NOT owned by that renderer, the jump path the
+   dashboard uses to get back to a stage, and the storage key written under it. Every
+   way to get that wrong is invisible at runtime - no box appears, or the box appears
+   and its dashboard row goes nowhere - so the name is checked across the boundary. */
+const jrMounts = new Set([...app.matchAll(/journalMount\("([a-z0-9_-]+)"/g)].map(m=>m[1]));
+const jrHosts = new Set([...body.matchAll(/id="jr-([a-z0-9_-]+)"/g)].map(m=>m[1]));
+const jrTabs = new Map();
+for (const m of ((/var JR_TABS = \{([\s\S]*?)\};/.exec(app)||[,""])[1]).matchAll(/([a-z0-9_-]+):\s*"([^"]+)"/g)) jrTabs.set(m[1], m[2]);
+if (!jrMounts.size) fail("no lab mounts a journal - journalMount() is never called");
+for (const l of jrMounts) if (!jrHosts.has(l)) fail("journalMount(\""+l+"\") has no #jr-"+l+" host in the body, so the box is silently dropped");
+for (const l of jrHosts) if (!jrMounts.has(l)) fail("#jr-"+l+" exists but no renderer mounts a journal into it");
+for (const l of jrMounts) if (!jrTabs.has(l)) fail("lab "+l+" has a journal but no JR_TABS entry, so the dashboard cannot jump back to its stages");
+for (const [l, attr] of jrTabs) {
+  if (!jrMounts.has(l)) fail("JR_TABS lists "+l+" but that lab has no journal to jump back into");
+  if (!body.includes(attr+"=") && !app.includes(attr+"=\"")) fail("JR_TABS points "+l+" at ["+attr+"], which neither the markup nor the labs generate");
+}
+
 /* Content breakpoints are measured off the content column, and the rail takes
    --rail (212px) out of the viewport before any content starts. A rule written as
    max-width:600px after the rail landed would fire at a 388px content column, so the
@@ -104,4 +122,4 @@ if (fs.existsSync(built)) {
   if ((html.match(/<style/gi)||[]).length !== 1) fail("built HTML must contain exactly one <style>");
 }
 
-if (!process.exitCode) console.log("Validation OK: fragments, JavaScript syntax, rail and view targets, content breakpoints, graph hooks, and built HTML shape.");
+if (!process.exitCode) console.log("Validation OK: fragments, JavaScript syntax, rail and view targets, journal hosts, content breakpoints, graph hooks, and built HTML shape.");

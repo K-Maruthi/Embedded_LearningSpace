@@ -59,7 +59,7 @@
       <h3>notes and bookmarks</h3>
       <div class="substat" id="d-writing"></div>
       <div class="panelbtns">
-        <button type="button" id="d-copynotes">Copy all notes</button>
+        <button type="button" id="d-copynotes">Copy all writing</button>
         <button type="button" id="d-copyprog">Copy progress</button>
       </div>
     </div>
@@ -72,7 +72,7 @@
       <ul class="list" id="d-marks"></ul>
     </div>
     <div class="panel w6">
-      <h3>your notes</h3>
+      <h3>your writing</h3>
       <ul class="list" id="d-notes" style="max-height:250px"></ul>
     </div>
     <div class="panel w6">
@@ -142,6 +142,7 @@
     <button type="button" data-compile-stage="check" role="tab">8. Check</button>
   </div>
   <section class="complab-stage" id="complab-stage" aria-live="polite"></section>
+  <div class="jrhost" id="jr-compile"></div>
 </div></div>
 
 <div class="view" id="view-playground" hidden><div class="wrap linklab">
@@ -163,6 +164,7 @@
   </div>
 
   <section class="linklab-stage" id="linklab-stage" aria-live="polite"></section>
+  <div class="jrhost" id="jr-link"></div>
 
 </div></div>
 
@@ -173,6 +175,7 @@
     <p>Work the stages in order &mdash; each one gives you only the registers it teaches, and ends in a goal the model <em>grades against live register state</em>. Behind every bit you flip there is hardware you can watch: the pin&rsquo;s MOSFET cell, the counter&rsquo;s waveform with a draggable ARR line, and a swim-lane timeline of who owns the CPU. Or jump to stage 10, the full playground with fixed, correct preset programs. Nothing here is guesswork: the model is small and honest about the simplifications it makes.</p>
   </div>
   <div id="periplab-body"></div>
+  <div class="jrhost" id="jr-periph"></div>
 </div></div>
 
 <div class="view" id="view-protocols" hidden><div class="wrap prolab">
@@ -182,6 +185,7 @@
     <p>Registers decide a voltage; protocols are what a second device <em>infers</em> from that voltage over time. The module is grouped the way the hardware is: <strong>Basics</strong> (line physics, and the seven questions every serial protocol answers), then <strong>UART</strong>, <strong>I&sup2;C</strong> and <strong>SPI</strong> &mdash; each a set of graded stages on the same logic-analyser instrument. Everything is a live model, exactly like the Peripherals tab: watch the signal, read the code it equals, break it on purpose.</p>
   </div>
   <div id="prolab-body" role="tabpanel" aria-label="Protocol lab stage"></div>
+  <div class="jrhost" id="jr-protocols"></div>
 </div></div>
 
 <div class="view" id="view-practice" hidden><div class="wrap">

@@ -345,6 +345,12 @@ footer.foot code{font-family:var(--mono);font-size:12px;background:var(--surface
 .notes .nbtns{display:flex;gap:8px;margin-top:9px}
 .notes .nbtns button{background:var(--bg);border:1px solid var(--rule);border-radius:2px;padding:5px 10px;font-size:12px;cursor:pointer}
 .notes-empty{color:var(--ink-3);font-size:13.5px;font-family:var(--serif)}
+/* A lab stage's journal is the notes box wearing the lab's own accent, with a shorter
+   well: a stage should cost a paragraph, not an essay. It lives in a host the lab's
+   renderer does not own, so redrawing a stage cannot throw away a textarea mid-sentence. */
+.jrhost{margin-top:2px}
+.notes.jrbox{border-left-color:var(--steel)}
+.notes.jrbox textarea{min-height:104px}
 .md{font-family:var(--serif);font-size:15.5px;line-height:1.62}
 .md>:first-child{margin-top:0}
 .md>:last-child{margin-bottom:0}

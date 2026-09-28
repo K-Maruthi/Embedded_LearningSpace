@@ -51,7 +51,7 @@ app will not shrink past its 1050px minimum).
 | `40_graph.js` | Concept graph renderer |
 | `build.js` | Reproducible concatenation build (`npm run build:roadmap`); also copies the result to `src/index.html` |
 | `build.sh` | POSIX twin: validates and concatenates, but does not refresh `src/index.html` |
-| `validate_build.js` | Fragment, syntax, rail/view, content-breakpoint and graph-hook contract checks |
+| `validate_build.js` | Fragment, syntax, rail/view, journal-host, content-breakpoint and graph-hook contract checks |
 | `embedded-c-roadmap.html` | Generated standalone application |
 
 ## Runtime API

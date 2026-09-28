@@ -41,13 +41,18 @@ collapsed; the thin bar above the content names the section and view you are in.
   markdown notes, and a "mark as learned" gate that needs real notes before it unlocks
   (active-recall pedagogy).
 - **Dashboard** — learned counts, per-stage progress, a last-30-days activity heatmap,
-  prerequisite-aware "what to read next", a graded row for each of the four labs, and
-  clipboard export of notes/progress.
+  prerequisite-aware "what to read next", a graded row for each of the four labs, one
+  list of everything you wrote in your own words (topic notes *and* lab stage journals)
+  with a jump back to the exact stage, and clipboard export of notes/journals/progress.
 - **Mosaic** — one puzzle piece per topic that lifts to reveal a chip-die floorplan.
 - **Graph** — a custom force-directed concept graph (prerequisites, failure patterns,
   related topics) with layouts, edge toggles and deep links back to the roadmap.
 
 ### Labs
+Every lab stage carries a **stage journal** — the same markdown box a topic's notes use,
+placed under the stage so you can write down what that stage actually showed you. Journals
+count toward the Dashboard's "words written", list alongside your topic notes, and ride in
+the same backup file as the rest of your lab progress.
 - **Compilation Path** — an 8-stage walkthrough (source → preprocess → compile → assemble
   → object → link → image → check). With an ARM toolchain installed it runs the **real**
   `arm-none-eabi-gcc` and shows genuine per-stage output; otherwise it falls back to a

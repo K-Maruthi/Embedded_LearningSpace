@@ -5,7 +5,8 @@
   var K_DONE = "ecroadmap.v1", K_NOTE = "ecroadmap.notes.v1",
       K_MARK = "ecroadmap.marks.v1", K_THEME = "ecroadmap.theme",
       K_IV = "ecroadmap.interview.v1", K_FAULT = "ecroadmap.faults.v1",
-      K_WALK = "ecroadmap.walk.v1";   /* which stages of the two reading labs you opened */
+      K_WALK = "ecroadmap.walk.v1",   /* which stages of the two reading labs you opened */
+      K_JOURNAL = "ecroadmap.journals.v1";  /* what a stage wrote down, keyed "lab:stage" */
   var REGION_Q = {
     vector: "vector table", text: ".text", rodata: "rodata", data: ".data",
     bss: ".bss", heap: "heap", stack: "stack", mmio: "register", nvic: "interrupt"
@@ -87,8 +88,11 @@
      schema 1 files simply have no "labs" section and restore the roadmap only. */
   var DATA_SCHEMA = 2;
   /* Each key is declared with var inside its own lab module further down this file,
-     so the list is built when called, not when this line runs. */
-  function labKeys() { return [K_BENCH, K_LKSAND, K_PERIPH, K_PROTOS, K_WALK]; }
+     so the list is built when called, not when this line runs. The journals are in it
+     even though they are written from the roadmap's own editor: they belong to a lab
+     stage, and a lab key arriving in a backup is what makes the import reload rather
+     than let an open lab write stale state over it. */
+  function labKeys() { return [K_BENCH, K_LKSAND, K_PERIPH, K_PROTOS, K_WALK, K_JOURNAL]; }
   function labState() {
     var labs = {};
     labKeys().forEach(function (k) { var v = rd(k, null); if (v !== null) { labs[k] = v; } });
@@ -340,95 +344,182 @@
     return w ? w.split(/\s+/).length : 0;
   }
 
-  function buildNotes(t, wrap, onMarkLearned) {
-    var box = el("div", "notes");
+  /* ---------------- the markdown editor every piece of writing shares ----------------
+     A topic's notes and a lab stage's journal are the same object: text you can read,
+     a textarea you can write in, a debounced save that admits itself. They differ in
+     where the text lives and whether a gate hangs off it, so exactly those two parts
+     stay with the caller. The point of one copy is not tidiness - the debounce, the
+     "saved" dot and the rule that collapsing saves what is on screen are the details
+     that only ever get fixed once, and a second save path is where a bug would live
+     quietly. Everything it needs from the caller:
+       get()      current text
+       set(txt)   hold the keystroke somewhere render() and the gate can see at once
+       flush()    write it out for real
+       onRender   a keystroke changed something that is displayed elsewhere
+       onEdit / onInput   the caller's own reveal/hide logic (the gate's button)
+     It returns the box plus open/close/persist, because the topic layer needs to
+     append its mark-as-learned button into the same row and drive the box from the
+     checkbox when the gate refuses. */
+  function markdownEditor(o) {
+    var box = el("div", o.cls);
+    var head = el("h4", null, "<span>" + o.title + "</span><span class=\"saved\">saved</span>");
     var view = el("div");
-    var editing = false, timer = null;
-
-    function render() {
-      var txt = notes[t.id] || "";
-      wrap.dataset.note = txt.trim() ? "1" : "0";
-      if (editing) { return; }
-      view.innerHTML = txt.trim()
-        ? '<div class="md">' + md(txt) + "</div>"
-        : '<p class="notes-empty">Nothing yet. Write what you had to look up, the thing that finally made it click, or the bug this explains.</p>';
-    }
-
-    var head = el("h4", null, "<span>your notes &#183; markdown</span><span class=\"saved\">saved</span>");
-    var gateMsg = el("p", "gate-msg",
-      "Write a couple of sentences in your own words \u2014 that's what marks this learned.");
     var btns = el("div", "nbtns");
     var edit = el("button", null, "Write");
     edit.type = "button";
-    var markBtn = el("button", "mark-learned", "Mark as learned");
-    markBtn.type = "button";
     btns.appendChild(edit);
-    btns.appendChild(markBtn);
+    var editing = false, timer = null;
 
-    function syncMarkBtn() {
-      var ok = noteLen(t.id) >= GATE_MIN;
-      markBtn.classList.toggle("show", editing && ok && !isDone(t.id));
+    function render() {
+      var txt = o.get();
+      if (o.onRender) { o.onRender(txt); }
+      if (editing) { return; }   /* never swap the textarea out from under the caret */
+      view.innerHTML = txt.trim()
+        ? '<div class="md">' + md(txt) + "</div>"
+        : '<p class="notes-empty">' + o.empty + "</p>";
     }
-
-    edit.addEventListener("click", function () {
-      if (editing) {
-        editing = false;
-        edit.textContent = notes[t.id] ? "Edit" : "Write";
-        box.classList.remove("gate", "pulse");
-        gateMsg.classList.remove("on");
-        render(); syncMarkBtn();
-        return;
-      }
+    /* Runs on the debounce while typing, and again when the editor collapses: text
+       that has only been sitting in a textarea for 300ms is not yet text that would
+       survive closing the app. */
+    function persist() {
+      clearTimeout(timer);
+      timer = null;
+      o.flush();
+      var s = head.querySelector(".saved");
+      s.classList.add("on");
+      setTimeout(function () { s.classList.remove("on"); }, 900);
+      if (o.onSave) { o.onSave(); }
+    }
+    function open() {
+      if (editing) { return; }
       editing = true;
       edit.textContent = "Done";
       var ta = el("textarea");
-      ta.value = notes[t.id] || "";
-      ta.placeholder = "# what clicked\n\n- `volatile` only stops the compiler, not the bus\n- check the map file before blaming the code";
+      ta.value = o.get();
+      ta.placeholder = o.placeholder;
       view.innerHTML = "";
       view.appendChild(ta);
       ta.focus();
-      syncMarkBtn();
+      if (o.onEdit) { o.onEdit(true); }
       ta.addEventListener("input", function () {
-        notes[t.id] = ta.value;
-        if (!ta.value.trim()) { delete notes[t.id]; }
-        wrap.dataset.note = ta.value.trim() ? "1" : "0";
-        syncMarkBtn();
+        o.set(ta.value);
+        if (o.onRender) { o.onRender(ta.value); }
+        if (o.onInput) { o.onInput(ta.value); }
         clearTimeout(timer);
-        timer = setTimeout(function () {
-          wr(K_NOTE, notes);
-          var s = head.querySelector(".saved");
-          s.classList.add("on");
-          setTimeout(function () { s.classList.remove("on"); }, 900);
-          refreshDash();
-        }, 400);
+        timer = setTimeout(persist, 400);
       });
+    }
+    function close() {
+      if (!editing) { return; }
+      editing = false;
+      persist();
+      edit.textContent = o.get() ? "Edit" : "Write";
+      render();
+      if (o.onEdit) { o.onEdit(false); }
+    }
+    edit.addEventListener("click", function () { if (editing) { close(); } else { open(); } });
+
+    box.appendChild(head);
+    if (o.hint) { box.appendChild(o.hint); }
+    box.appendChild(view);
+    box.appendChild(btns);
+    edit.textContent = o.get() ? "Edit" : "Write";
+    render();
+    return {
+      box: box, head: head, view: view, btns: btns, edit: edit,
+      open: open, close: close, persist: persist,
+      isEditing: function () { return editing; },
+    };
+  }
+
+  /* A topic's notes, wearing the editor above: the same box, plus the one hard rule of
+     this app - you may not mark something learned in your own words-free. */
+  function buildNotes(t, wrap, onMarkLearned) {
+    var gateMsg = el("p", "gate-msg",
+      "Write a couple of sentences in your own words \u2014 that's what marks this learned.");
+    var markBtn = el("button", "mark-learned", "Mark as learned");
+    markBtn.type = "button";
+
+    function syncMarkBtn() {
+      markBtn.classList.toggle("show", ed.isEditing() && noteLen(t.id) >= GATE_MIN && !isDone(t.id));
+    }
+
+    var ed = markdownEditor({
+      cls: "notes",
+      title: "your notes &#183; markdown",
+      empty: "Nothing yet. Write what you had to look up, the thing that finally made it click, or the bug this explains.",
+      placeholder: "# what clicked\n\n- `volatile` only stops the compiler, not the bus\n- check the map file before blaming the code",
+      hint: gateMsg,
+      get: function () { return notes[t.id] || ""; },
+      set: function (txt) { notes[t.id] = txt; if (!txt.trim()) { delete notes[t.id]; } },
+      flush: function () { wr(K_NOTE, notes); },
+      onRender: function (txt) { wrap.dataset.note = txt.trim() ? "1" : "0"; },
+      onSave: refreshDash,
+      onInput: syncMarkBtn,
+      onEdit: function (isOpen) {
+        if (!isOpen) { ed.box.classList.remove("gate", "pulse"); gateMsg.classList.remove("on"); }
+        syncMarkBtn();
+      },
     });
+    ed.btns.appendChild(markBtn);
 
     markBtn.addEventListener("click", function () {
-      wr(K_NOTE, notes);
-      editing = false;
-      edit.textContent = "Edit";
-      box.classList.remove("gate", "pulse");
-      gateMsg.classList.remove("on");
-      render();
+      /* close() is what writes; a mark from outside the editor still has to save the
+         text the gate just accepted. */
+      if (ed.isEditing()) { ed.close(); } else { ed.persist(); }
       onMarkLearned();
     });
 
-    box.appendChild(head);
-    box.appendChild(gateMsg);
-    box.appendChild(view);
-    box.appendChild(btns);
-    edit.textContent = notes[t.id] ? "Edit" : "Write";
-    render();
-
-    box._openForGate = function () {
-      box.classList.add("gate", "pulse");
+    ed.box._openForGate = function () {
+      ed.box.classList.add("gate", "pulse");
       gateMsg.classList.add("on");
-      setTimeout(function () { box.classList.remove("pulse"); }, 2400);
-      if (!editing) { edit.click(); }
-      box.scrollIntoView({ behavior: "smooth", block: "center" });
+      setTimeout(function () { ed.box.classList.remove("pulse"); }, 2400);
+      ed.open();
+      ed.box.scrollIntoView({ behavior: "smooth", block: "center" });
     };
-    return box;
+    return ed.box;
+  }
+
+  /* ---------------- lab stage journals, the writing end ----------------
+     Each stage of the four labs carries the same box a topic carries, below the stage
+     rather than beside it: write what this stage actually showed you. The storage side
+     of that lives with the other lab state, down in the dashboard section next to the
+     walk marks, because it is read the same way - out of localStorage at the moment it
+     is shown, never from a mirror that a restored backup could disagree with. */
+
+  function journalBox(lab, stage, name) {
+    /* What is in the textarea before the debounce has written it. Held here rather
+       than in a global mirror so the box reads its own text back after a collapse,
+       while the storage stays the single answer for everyone else. */
+    var draft = null;
+    /* The box, not the editor's control object: this is a box factory in the same
+       shape as buildNotes, and the mount appends whatever comes back. */
+    return markdownEditor({
+      cls: "notes jrbox",
+      title: esc(name) + " &#183; stage journal",
+      empty: "What did this stage actually show you? Write the line you would want to find again in six months.",
+      placeholder: "# what this stage showed\n\n- the observation, not the conclusion\n- the error text that pointed at it",
+      get: function () { return draft === null ? jrGet(lab, stage) : draft; },
+      set: function (txt) { draft = txt; },
+      /* Re-reads the map on the way in, so a journal written by another stage's box
+         while this one was being typed into cannot be lost underneath it. */
+      flush: function () { jrSet(lab, stage, draft === null ? jrGet(lab, stage) : draft); draft = null; },
+      onSave: refreshDash,
+    }).box;
+  }
+
+  /* Labs rewrite their own stage markup wholesale, so the journal has to sit in a host
+     the renderer does not own, and be rebuilt only when the stage actually changes.
+     Without the guard, a renderer that redraws the current stage would silently throw
+     away a textarea mid-sentence. */
+  function journalMount(lab, stage, name) {
+    var host = document.getElementById("jr-" + lab);
+    if (!host) { return; }
+    var key = jrKey(lab, stage);
+    if (host._jr === key) { return; }
+    host.innerHTML = "";
+    host.appendChild(journalBox(lab, stage, name));
+    host._jr = key;
   }
 
   function buildTopic(t, stage) {
@@ -780,6 +871,42 @@
     });
   }
 
+  /* Jumping back to a stage you wrote about is a two-step thing no lab offers on its
+     own: the view has to be initialised before its stage nav exists, and each lab
+     changes stage by its own button. So the jump presses that button rather than
+     calling an internal - a lab that later moves stages a different way keeps working
+     here, and a stage that no longer has a button lands you on the lab instead of on a
+     wrong stage. The names are the walk-mark ones, except the linker lab's view.
+     The Protocol Lab is the one exception: it shows only the current family's stage
+     tabs, so a journal for a stage in another family has no button to press yet even
+     though that stage is real. There the jump makes the same call the tab would have -
+     prGoStage switches to the stage and its family at once - while a stage that truly
+     does not exist still falls through to simply opening the lab. */
+  var JR_TABS = {
+    compile: "data-compile-stage", link: "data-link-stage",
+    periph: "data-pfstage", protocols: "data-prstage",
+  };
+  /* The narrow column in a dashboard list row holds a topic code like "C07", so a
+     journal row puts the shortest true name of the lab there instead of padding it
+     with a long title that would push the preview off the panel. */
+  var JR_SHORT = { compile: "c-path", link: "linker", periph: "periph", protocols: "proto" };
+  function goStage(lab, stage) {
+    if (!JR_TABS[lab]) { return; }
+    setView(lab === "link" ? "playground" : lab);
+    var btn = document.querySelector("[" + JR_TABS[lab] + '="' + stage + '"]');
+    if (btn) { btn.click(); return; }
+    if (lab === "protocols" && prStageById(Number(stage))) { prGoStage(Number(stage)); }
+  }
+  function wireGoStage(host) {
+    Array.prototype.forEach.call(host.querySelectorAll("[data-gostage]"), function (a) {
+      a.addEventListener("click", function (e) {
+        e.preventDefault();
+        var k = String(a.dataset.gostage).split(":");
+        goStage(k[0], k[1]);
+      });
+    });
+  }
+
   /* ---- lab progress, for the dashboard ----
      The two reading labs (Compilation Path, Linker & Startup) have no graded goals,
      so the honest metric there is which stages you opened. The two bench labs do
@@ -820,6 +947,58 @@
   function stageIds(meta) {
     return meta.map(function (s) { return s.id; });
   }
+
+  /* ---- lab stage journals, the storage end ----
+     Keyed "lab:stage" in one object under K_JOURNAL, held only in localStorage and
+     read when something asks for it - so an import that reloads the page cannot be
+     overwritten by a lab still holding an in-memory copy, and a lab you never opened
+     has no entry here to inflate a count. An empty journal deletes its key rather than
+     storing "", the same rule the topic notes follow. */
+  function jrKey(lab, stage) { return lab + ":" + stage; }
+  function jrAll() {
+    var j = rd(K_JOURNAL, null);
+    return j && typeof j === "object" ? j : {};
+  }
+  function jrGet(lab, stage) { return jrAll()[jrKey(lab, stage)] || ""; }
+  function jrSet(lab, stage, txt) {
+    /* Re-read on the way in, and only this stage's key touched: two journal boxes can
+       be alive at once when a stage is switched while the old one's save is still on
+       the debounce, and neither may write the other's copy of the map back. */
+    var j = jrAll(), k = jrKey(lab, stage);
+    if (txt && txt.trim()) { j[k] = txt; } else { delete j[k]; }
+    wr(K_JOURNAL, j);
+  }
+
+  /* Which stages each lab has right now, and what they are called. Same authority the
+     progress rows run on: a journal is only countable, listable or exportable while
+     its stage exists. A renamed or dropped stage does not delete what you wrote about
+     it - the entry stays in storage - it simply stops being presented as somewhere
+     you can still go. */
+  function jrLabStages() {
+    return [
+      { lab: "compile", title: "Compilation Path", stages: Object.keys(COMPILE_DATA),
+        name: function (s) { return (COMPILE_DATA[s] || {}).title || s; } },
+      { lab: "link", title: "Linker & Startup", stages: LINK_STAGES,
+        name: function (s) { return (LINK_DATA[s] || {}).title || s; } },
+      { lab: "periph", title: "Peripheral Playground", stages: stageIds(PF_STAGE_META),
+        name: function (s) { return (pfStageById(s) || {}).name || s; } },
+      { lab: "protocols", title: "Protocol Lab", stages: stageIds(PR_STAGE_META),
+        name: function (s) { return (prStageById(s) || {}).name || s; } }
+    ];
+  }
+  /* Ordered by lab then by the lab's own stage order, so the writing panel reads like
+     the labs rather than like the order keys happen to come out of storage. */
+  function jrEntries() {
+    var all = jrAll(), out = [];
+    jrLabStages().forEach(function (g) {
+      g.stages.forEach(function (s) {
+        var txt = String(all[jrKey(g.lab, s)] || "");
+        if (!txt.trim()) { return; }
+        out.push({ lab: g.lab, stage: s, name: g.name(s), text: txt });
+      });
+    });
+    return out;
+  }
   function labRow(name, view, done, total, cap) {
     var pct = total ? Math.round((done / total) * 100) : 0;
     return '<div class="stagebar labrow">' +
@@ -854,6 +1033,9 @@
   function refreshDash(force) {
     if (!force && currentView !== "dash") { return; }
     var n = allTopics.length, d = doneCount();
+    /* Read once per refresh: four labs' stage lists and a storage read would otherwise
+       happen three times over in here, and every use below has to agree on one answer. */
+    var jrs = jrEntries();
     document.getElementById("d-count").innerHTML = d + '<small id="d-of">of ' + n + "</small>";
 
     var remaining = n - d;
@@ -885,6 +1067,12 @@
       Array.prototype.forEach.call(lh.querySelectorAll("[data-golab]"), function (b) {
         b.addEventListener("click", function () { setView(b.dataset.golab); });
       });
+      /* Opening every stage of a lab is not the same as having got anything out of it,
+         and the rows above would happily read 8/8 either way. This is the nudge, said
+         where the progress it is talking about is. */
+      lh.innerHTML += '<p class="labcap jrtally">' + (jrs.length
+        ? jrs.length + " stage journal" + (jrs.length === 1 ? "" : "s") + " written."
+        : "Nothing written in a lab yet. A stage you opened and described is a stage you can come back to; a stage you only looked at is not.") + "</p>";
     }
 
     var today = new Date(); today.setHours(0, 0, 0, 0);
@@ -911,8 +1099,14 @@
     var words = Object.keys(notes).reduce(function (a, k) {
       return a + (notes[k] || "").split(/\s+/).filter(Boolean).length;
     }, 0);
+    /* Journals count toward "words written" because they are the same act, and the
+       number is the one a learner is actually being asked about. */
+    var jrWords = jrs.reduce(function (a, e) {
+      return a + e.text.split(/\s+/).filter(Boolean).length;
+    }, 0);
     document.getElementById("d-writing").innerHTML =
-      nNotes + " topics with notes, " + words + " words written.<br>" + nMarks + " bookmarked.";
+      nNotes + " topics with notes, " + jrs.length + " stage journals, " +
+      (words + jrWords) + " words written.<br>" + nMarks + " bookmarked.";
 
     var next = allTopics.filter(function (t) {
       return !isDone(t.id) && (t.prereq || []).every(function (p) { return isDone(p); });
@@ -932,19 +1126,49 @@
 
     var oh = document.getElementById("d-notes");
     var nlist = allTopics.filter(function (t) { return (notes[t.id] || "").trim(); });
-    oh.innerHTML = nlist.length
-      ? nlist.map(function (t) {
-          var pv = notes[t.id].replace(/[#*`>\-]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120);
-          return linkItem(t, '<span class="pv">' + esc(pv) + "</span>");
-        }).join("")
-      : '<li><p class="blank">No notes yet. Open any topic and press Write.</p></li>';
+    function preview(txt) {
+      return esc(String(txt).replace(/[#*`>\-]/g, " ").replace(/\s+/g, " ").trim().slice(0, 120));
+    }
+    /* One panel for everything written down, because "what have I actually put in my
+       own words" is one question. A topic row goes to the topic; a journal row goes to
+       the stage of the lab it was written on. */
+    oh.innerHTML = (
+      nlist.map(function (t) {
+        return linkItem(t, '<span class="pv">' + preview(notes[t.id]) + "</span>");
+      }).join("") +
+      jrs.map(function (e) {
+        return '<li><a href="#" data-gostage="' + e.lab + ":" + e.stage + '"><span class="c">' +
+               esc(JR_SHORT[e.lab] || e.lab) + "</span>" + esc(e.name) + "</a>" +
+               '<span class="pv">' + preview(e.text) + "</span></li>";
+      }).join("")
+    ) || '<li><p class="blank">Nothing written yet. Open a topic and press Write, or work a lab stage and fill in the journal under it.</p></li>';
     wireGo(oh);
+    wireGoStage(oh);
 
     var answered = Object.keys(ivState.answers).length;
     var solved = Object.keys(faultState.seen).filter(function (k) { return faultState.seen[k]; }).length;
     document.getElementById("d-practice").innerHTML =
       answered + " interview question" + (answered === 1 ? "" : "s") + " self-graded.<br>" +
       solved + " / " + FAULTS.length + " fault scenarios solved.";
+  }
+
+  /* Journals get their own section in the export, grouped by lab and in the lab's own
+     stage order, with the lab named above the stage: "4. Memory" means nothing six
+     months later unless you know whose stage 4 it was. */
+  function journalsMarkdown() {
+    var out = [], all = jrAll();
+    jrLabStages().forEach(function (g) {
+      var body = [];
+      g.stages.forEach(function (s) {
+        var txt = String(all[jrKey(g.lab, s)] || "");
+        if (!txt.trim()) { return; }
+        body.push("#### " + g.name(s) + "", "", txt.trim(), "");
+      });
+      if (!body.length) { return; }
+      out.push("### " + g.title + "", "");
+      out = out.concat(body);
+    });
+    return out;
   }
 
   function notesMarkdown() {
@@ -957,6 +1181,8 @@
         out.push("### " + t.code + " " + t.t, "", notes[t.id].trim(), "");
       });
     });
+    var jr = journalsMarkdown();
+    if (jr.length) { out.push("## Lab stage journals", ""); out = out.concat(jr); }
     return out.join("\n");
   }
 
@@ -2103,6 +2329,7 @@ bx      lr</pre></div><div class="complab-card"><h4>Output</h4><div class="compl
     if(!host||!nav)return;
     var d=COMPILE_DATA[stage];
     walkMark("compile", stage);
+    journalMount("compile", stage, d.title);
     Array.prototype.forEach.call(nav.querySelectorAll("button[data-compile-stage]"),function(b){b.setAttribute("aria-selected",String(b.dataset.compileStage===stage));});
     var body = (clab.mode === "bench") ? clabBenchHtml(stage) : d.body;
     var live = clabLiveHtml(stage);
@@ -2818,6 +3045,7 @@ arm-none-eabi-objcopy -O binary \
     if (!host || !nav) { return; }
     var d=LINK_DATA[stage];
     walkMark("link", stage);
+    journalMount("link", stage, d.title);
     if(stage==="sandbox"){ d={title:d.title, intro:d.intro, body:lksandBody()}; }
     Array.prototype.forEach.call(nav.querySelectorAll("button[data-link-stage]"),function(b){b.setAttribute("aria-selected",String(b.dataset.linkStage===stage));});
     host.innerHTML='<div class="linklab-stage-head"><h3>'+esc(d.title)+'</h3><p>'+esc(d.intro)+'</p></div><div class="linklab-body">'+d.body+'</div>';
@@ -3815,6 +4043,7 @@ arm-none-eabi-objcopy -O binary \
     pfWire(host);
     pfRenderLive();
     pfRenderUserCode();
+    journalMount("periph", periph.stage, (pfStageById(periph.stage) || PF_STAGE_META[0]).name);
   }
 
   function pfRenderLive() {
@@ -5684,6 +5913,7 @@ arm-none-eabi-objcopy -O binary \
     if (protos.i2c.tx) { var s5 = document.getElementById('pr-i2c-send') || document.getElementById('pr-i2c-send6'); if (s5) { s5.disabled = true; } }
     if (protos.spi.tx) { var s8 = document.getElementById('pr-spi-send') || document.getElementById('pr-spi-xfer'); if (s8) { s8.disabled = true; } }
     prRenderLive();
+    journalMount("protocols", protos.stage, (prStageById(protos.stage) || PR_STAGE_META[0]).name);
   }
   function prRenderLive() {
     if (!protocolsInited) { return; }
