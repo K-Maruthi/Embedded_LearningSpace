@@ -7,7 +7,6 @@ use crate::toolchain::ToolchainInfo;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 pub const MAIN_C: &str = include_str!("examples/main.c");
 pub const STARTUP_S: &str = include_str!("examples/startup.s");
@@ -203,19 +202,21 @@ fn stage(id: &str) -> StageOut {
 
 pub fn run_pipeline(info: &ToolchainInfo, src: &SourcesBundle, custom: bool) -> PipelineReport {
     let gcc = PathBuf::from(&info.gcc);
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let dir = std::env::temp_dir().join(format!("ecroadmap-pipeline-{nanos}"));
-    if std::fs::create_dir_all(&dir).is_err() {
-        return PipelineReport {
-            toolchain: format!("{} {}", info.gcc, info.version),
-            ok: false,
-            custom,
-            stages: vec![],
-        };
-    }
+    /* tempfile gives a collision-safe unique name and RAII cleanup: the dir is
+       removed on drop even when a stage returns early or a future edit adds a
+       `?`/unwrap path — the old hand-rolled remove_dir_all only ran at the end. */
+    let temp = match tempfile::Builder::new().prefix("ecroadmap-pipeline-").tempdir() {
+        Ok(t) => t,
+        Err(_) => {
+            return PipelineReport {
+                toolchain: format!("{} {}", info.gcc, info.version),
+                ok: false,
+                custom,
+                stages: vec![],
+            };
+        }
+    };
+    let dir = temp.path().to_path_buf();
     let r = Runner { gcc, dir: dir.clone() };
     let mut stages: Vec<StageOut> = Vec::new();
 
@@ -374,7 +375,7 @@ pub fn run_pipeline(info: &ToolchainInfo, src: &SourcesBundle, custom: bool) -> 
         stages.push(s);
     }
 
-    let _ = std::fs::remove_dir_all(&dir);
+    // `temp` drops here, which removes the whole build directory.
     let ok = stages.iter().all(|s| s.ok);
     PipelineReport {
         toolchain: format!("{} ({})", info.gcc, info.version),

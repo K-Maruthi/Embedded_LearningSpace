@@ -5,8 +5,15 @@ node_modules/
 src-tauri/target/
 target/
 
+# --- generated frontend: built from roadmap-source/ fragments ---
+# npm run build:roadmap regenerates these (tauri dev/build runs it automatically);
+# keeping them out of git avoids 13k-line diffs on every fragment edit.
+roadmap-source/embedded-c-roadmap.html
+src/index.html
+
 # --- local noise ---
 .qoder/
+.freebuff/
 dev-run.log
 *.log
 # verification screenshots taken while working on a lab

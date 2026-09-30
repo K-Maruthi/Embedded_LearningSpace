@@ -11,8 +11,12 @@ const fs = require('fs');
 const path = require('path');
 
 const SRC = path.join(__dirname, '..', 'roadmap-source', '20_app.js');
+const LINKER = path.join(__dirname, '..', 'roadmap-source', '22_lab_linker.js');
 const PAGE = path.join(__dirname, '..', 'roadmap-source', '02_body.html');
 const src = fs.readFileSync(SRC, 'utf8');
+/* LINK_STAGES / LINK_DATA moved into the linker lab's own fragment; the app source
+   is the concatenation the build ships, so constants are derived from both. */
+const appAll = src + fs.readFileSync(LINKER, 'utf8');
 const page = fs.readFileSync(PAGE, 'utf8');
 
 const from = src.indexOf('/* ---- lab progress');
@@ -23,14 +27,37 @@ const body = src.slice(from, to);
 /* The denominators are only honest if the lists handed to dashLabs() really are the
    stages each lab can navigate to. Derive them from the source, not from what this
    test hopes they are. */
-const LINK_STAGES = (src.match(/var LINK_STAGES = \[([^\]]*)\]/)[1].match(/"([^"]+)"/g) || [])
+const LINK_STAGES = (appAll.match(/var LINK_STAGES = \[([^\]]*)\]/)[1].match(/"([^"]+)"/g) || [])
   .map((s) => s.slice(1, -1));
 const linkNav = [...page.matchAll(/data-link-stage="([^"]+)"/g)].map((m) => m[1]);
 const compileNav = [...page.matchAll(/data-compile-stage="([^"]+)"/g)].map((m) => m[1]);
-const linkDataKeys = [...src
-  .slice(src.indexOf('var LINK_DATA = {'), src.indexOf('var LINK_RULES = {'))
+/* Brace-match the LINK_DATA literal itself rather than slicing up to the next
+   top-level var. Slicing to a sentinel looks equivalent but is not: any other
+   4-space `name: {` object declared between the two - ASM_KINDS, for one - is
+   picked up as if it were a stage, which silently widened this list whenever a
+   new table landed in the fragment. That only stayed harmless while the check
+   was one-directional; the reverse check below turned it into a false failure
+   pointing at the wrong table. */
+function objectLiteralAfter(src, marker) {
+  const at = src.indexOf(marker);
+  if (at < 0) { return ''; }
+  const open = src.indexOf('{', at);
+  let depth = 0;
+  for (let i = open; i < src.length; i++) {
+    if (src[i] === '{') { depth++; }
+    else if (src[i] === '}') { depth--; if (depth === 0) { return src.slice(open + 1, i); } }
+  }
+  return '';
+}
+const linkDataKeys = [...objectLiteralAfter(appAll, 'var LINK_DATA = {')
   .matchAll(/^ {4}(\w+): \{$/gm)].map((m) => m[1]);
-const SANDBOX_ASSIGNED = /LINK_DATA\.sandbox = \{/.test(src);
+/* Stages whose body is built by a function instead of written inline are attached
+   as LINK_DATA.<name> = { ... }. The regex scan above only sees literal keys, so
+   collect these separately rather than special-casing one stage by name - a
+   hardcoded exception would have let the next function-built stage fail here
+   with a message pointing at the wrong thing. */
+const linkDataAssigned = [...appAll.matchAll(/LINK_DATA\.(\w+) = \{/g)].map((m) => m[1]);
+const LINK_DATA_KEYS = linkDataKeys.concat(linkDataAssigned);
 
 const store = {};
 const env = {
@@ -74,8 +101,11 @@ function ok(name, cond, extra) {
 ok('LINK_STAGES matches the linker nav buttons',
   JSON.stringify(LINK_STAGES) === JSON.stringify(linkNav), [LINK_STAGES, linkNav]);
 ok('every nav link stage resolves in LINK_DATA (else it silently redirects to mcu)',
-  linkNav.every((s) => linkDataKeys.indexOf(s) >= 0 || (s === 'sandbox' && SANDBOX_ASSIGNED)),
-  linkNav.filter((s) => linkDataKeys.indexOf(s) < 0 && !(s === 'sandbox' && SANDBOX_ASSIGNED)));
+  linkNav.every((s) => LINK_DATA_KEYS.indexOf(s) >= 0),
+  linkNav.filter((s) => LINK_DATA_KEYS.indexOf(s) < 0));
+ok('and the reverse: no LINK_DATA stage is unreachable from the nav',
+  LINK_DATA_KEYS.every((s) => linkNav.indexOf(s) >= 0),
+  LINK_DATA_KEYS.filter((s) => linkNav.indexOf(s) < 0));
 ok('the compile nav is populated', compileNav.length === 8, compileNav);
 
 const CS = compileNav, LS = LINK_STAGES;

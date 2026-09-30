@@ -26,6 +26,20 @@ impl ToolchainInfo {
 /// Parenthesised text (toolchain banners, build labels) is dropped first, so
 /// "arm-none-eabi-gcc (Arm GNU Toolchain 12.2.Rel1 (build ...)) 12.2.1 20221205"
 /// yields "12.2.1". Falls back to the trimmed line when no x.y[.z] token exists.
+/// True when a whitespace-delimited token looks like a version number:
+/// two or three all-digit parts joined by dots ("12.2.1", "10.2"). A bare
+/// date ("20221205") has one part and never matches; a date like "2022.05"
+/// is the residual ambiguity this shape cannot distinguish — no known
+/// arm-none-eabi banner emits one before the version, so the first match
+/// wins and stays correct in practice.
+fn version_token(token: &str) -> bool {
+    let parts: Vec<&str> = token.split('.').collect();
+    (2..=3).contains(&parts.len())
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
 pub fn parse_version(first_line: &str) -> String {
     let mut stripped = String::new();
     let mut depth = 0usize;
@@ -38,9 +52,7 @@ pub fn parse_version(first_line: &str) -> String {
         }
     }
     for token in stripped.split_whitespace() {
-        let digits_and_dots = token.chars().all(|c| c.is_ascii_digit() || c == '.');
-        let dots = token.matches('.').count();
-        if digits_and_dots && dots >= 1 && dots <= 2 && !token.starts_with('.') && !token.ends_with('.') {
+        if version_token(token) {
             return token.to_string();
         }
     }
@@ -165,5 +177,31 @@ mod tests {
     fn falls_back_to_whole_line() {
         assert_eq!(parse_version("weird banner"), "weird banner");
         assert_eq!(parse_version("   "), "unknown");
+    }
+
+    #[test]
+    fn more_than_two_dots_is_not_a_version() {
+        // Three dots exceeds the accepted shape, so nothing matches and the
+        // whole line becomes the version string.
+        assert_eq!(parse_version("arm-none-eabi-gcc 12.2.1.1"), "arm-none-eabi-gcc 12.2.1.1");
+    }
+
+    #[test]
+    fn a_bare_date_token_is_never_taken_as_the_version() {
+        assert_eq!(parse_version("arm-none-eabi-gcc 20221205"), "arm-none-eabi-gcc 20221205");
+    }
+
+    #[test]
+    fn candidate_root_names() {
+        // candidate_paths() lowercases directory names before this check.
+        assert!(interesting_root("arm gnu toolchain 12.2.rel1"));
+        assert!(interesting_root("arm-gnu-toolchain-12.2"));
+        assert!(interesting_root("xpack-arm-none-eabi-gcc-12.2.1-1"));
+        assert!(interesting_root("zephyr-sdk-0.16.1"));
+        assert!(interesting_root("sysgcc"));
+        assert!(interesting_root("gnu arm embedded"));
+        assert!(!interesting_root("rust"));
+        assert!(!interesting_root("java"));
+        assert!(!interesting_root("python311"));
     }
 }

@@ -50,7 +50,7 @@ const GATE_MIN = Number(/var GATE_MIN = (\d+);/.exec(body)[1]);
 /* ---- tiny DOM ---- */
 class Node {
   constructor(tag) {
-    this.tag = tag; this.kids = []; this.classes = new Set(); this.dataset = {};
+    this.tag = tag; this.kids = []; this.classes = new Set(); this.dataset = {}; this.attrs = {};
     this.listeners = {}; this.value = ''; this.placeholder = ''; this._text = ''; this._html = '';
     const self = this;
     this.classList = {
@@ -64,6 +64,10 @@ class Node {
       },
     };
   }
+  /* Attribute support is enough for the aria-live mirror the editor creates:
+     stored and returned, nothing interprets them. */
+  setAttribute(n, v) { this.attrs[n] = String(v); }
+  getAttribute(n) { return (n in this.attrs) ? this.attrs[n] : null; }
   get textContent() { return this._text; }
   set textContent(v) { this._text = String(v); this.kids = []; this._html = ''; }
   get innerHTML() { return this._html; }

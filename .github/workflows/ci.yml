@@ -1,0 +1,61 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  specs-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run behaviour specs
+        run: npm test
+
+      - name: Lint the fragments
+        run: npm run lint
+
+      - name: Check versions are in sync
+        run: node scripts/sync-version.js --check
+
+      - name: Build the frontend from fragments
+        run: npm run build:roadmap
+
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: arm-none-eabi
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test
+
+      # Lints, not just compilation: a warning-free build is how this repo has
+      # always read, so cargo check alone would let the first warning in unnoticed.
+      - name: cargo clippy
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings

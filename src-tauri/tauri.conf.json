@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "identifier": "com.embeddedc.learning.space",
   "build": {
+    "beforeDevCommand": "npm run build:roadmap",
+    "beforeBuildCommand": "npm run build:roadmap",
     "frontendDist": "../src"
   },
   "app": {
@@ -21,7 +23,7 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost; font-src 'self'; img-src 'self' data: blob:; object-src 'none'; base-uri 'none'; form-action 'none'; frame-src 'none'"
     }
   },
   "bundle": {

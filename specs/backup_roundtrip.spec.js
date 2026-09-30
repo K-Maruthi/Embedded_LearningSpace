@@ -11,7 +11,11 @@
 const fs = require('fs');
 const path = require('path');
 
-const src = fs.readFileSync(path.join(__dirname, '..', 'roadmap-source', '20_app.js'), 'utf8');
+/* The app source is the assembled IIFE span the build ships: lab keys are var-declared
+   inside their own lab fragments, so the declared-key scan must see all of them. */
+const srcDir = path.join(__dirname, '..', 'roadmap-source');
+const APP_FILES = ['20_app.js', '21_lab_compile.js', '22_lab_linker.js', '23_lab_periph.js', '24_lab_protocols.js', '25_api.js'];
+const src = APP_FILES.map((f) => fs.readFileSync(path.join(srcDir, f), 'utf8')).join('');
 
 /* ---- every storage key the app declares, read from the source ---- */
 const declared = {};
@@ -26,19 +30,27 @@ const body = src.slice(from, to);
 /* ---- stubs: only what the code under test actually calls ---- */
 const ROADMAP = ['K_DONE', 'K_NOTE', 'K_MARK', 'K_IV', 'K_FAULT', 'K_THEME'];
 const store = {};
-let reloads = 0, scheduled = [];
+let reloads = 0, scheduled = [], themeAttr = null;
 const env = {
   JSON: JSON, Object: Object, Number: Number, String: String, Array: Array, Date: Date,
   rd: (k, fb) => (k in store ? JSON.parse(store[k]) : fb),
   wr: (k, v) => { store[k] = JSON.stringify(v); },
-  localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; } },
+  localStorage: { getItem: (k) => (k in store ? store[k] : null), setItem: (k, v) => { store[k] = v; },
+    removeItem: (k) => { delete store[k]; } },
   location: { reload() { reloads++; } },
   setTimeout: (fn, ms) => { scheduled.push(fn); return 0; },
   document: {
     getElementById: (id) => ({ textContent: '', dataset: {}, style: {} }),
     querySelectorAll: () => [],
     createElement: () => ({ style: {}, select() {}, click() {} }),
-    body: { appendChild() {}, removeChild() {} }
+    body: { appendChild() {}, removeChild() {} },
+    /* restoreBackup() applies the imported theme directly; record it so the
+       round-trip checks below can assert on what the user would see. */
+    documentElement: {
+      setAttribute(n, v) { if (n === 'data-theme') { themeAttr = v; } },
+      getAttribute(n) { return n === 'data-theme' ? themeAttr : null; },
+      removeAttribute(n) { if (n === 'data-theme') { themeAttr = null; } }
+    }
   },
   allTopics: [], progress() {}, refreshDash() {}, refreshMosaic() {}, fireDoneChange() {},
   isDone: () => false, ivInited: false, faultsInited: false, faultOrder: [],
@@ -65,7 +77,7 @@ function ok(name, cond, extra) {
 /* setDataButtonState() also defers work, so the queue holds button-label restores as
    well as the reload. Drain it and judge the outcome by whether location.reload() ran. */
 function drain() { const q = scheduled; scheduled = []; q.forEach((fn) => fn()); return reloads; }
-function resetImports() { scheduled = []; reloads = 0; }
+function resetImports() { scheduled = []; reloads = 0; themeAttr = null; }
 
 /* ---- 1. nothing that persists can be left out of the backup ---- */
 ok('the app declares the storage keys we expect', declaredNames.length >= 12, declaredNames);
@@ -147,6 +159,55 @@ ok('import writes exactly the declared storage keys, nothing smuggled',
   JSON.stringify(Object.keys(store).sort()) === JSON.stringify(
     [declared.K_DONE, declared.K_NOTE, declared.K_MARK, declared.K_IV, declared.K_FAULT].sort()),
   Object.keys(store));
+ok('a smuggled-labs import does not restart the app either', drain() === 0, { reloads: reloads });
+
+/* ---- 7. the theme rides in settings and comes back out ---- */
+store[declared.K_THEME] = 'dark';
+const themed = JSON.stringify(M.snap());
+Object.keys(store).forEach((k) => { delete store[k]; });
+resetImports();
+ok('a backup records the theme it was taken under',
+  JSON.parse(themed).state.settings.theme === 'dark', JSON.parse(themed).state.settings);
+ok('restore puts the theme back into storage and onto the document',
+  M.restore(themed) === true && store[declared.K_THEME] === 'dark' && themeAttr === 'dark',
+  { stored: store[declared.K_THEME], attr: themeAttr });
+
+/* A backup without a settings section (schema-1 vintage, or a future envelope that
+   dropped it) must not clear the theme the user already has. */
+resetImports();
+store[declared.K_THEME] = 'dark';
+ok('a backup without settings leaves the current theme alone',
+  M.restore(v1) === true && store[declared.K_THEME] === 'dark' && themeAttr === null,
+  { stored: store[declared.K_THEME], attr: themeAttr });
+
+/* An empty theme means the backup was taken while following the system default,
+   so that is what gets restored - the stored override goes away. */
+const sysTheme = JSON.stringify({ schema: 2, app: 'embedded-c-roadmap',
+  state: { done: {}, notes: {}, marks: {}, interview: { answers: {} }, faults: { seen: {} },
+    labs: {}, settings: { theme: '' } } });
+resetImports();
+ok('an empty restored theme clears the stored override',
+  M.restore(sysTheme) === true && store[declared.K_THEME] === undefined && themeAttr === null,
+  { stored: store[declared.K_THEME], attr: themeAttr });
+
+/* ---- 8. an import that changes nothing does not restart the app ----
+   The reload exists so a running lab ticker cannot write its stale in-memory copy
+   over the import; when the incoming lab state equals what is stored, there is
+   nothing to overwrite and no restart is owed. */
+resetImports();
+const sameLabs = JSON.stringify({ schema: 2, app: 'embedded-c-roadmap',
+  state: { done: {}, notes: {}, marks: {}, interview: { answers: {} }, faults: { seen: {} },
+    labs: {}, settings: { theme: 'dark' } } });
+ok('importing identical lab state does not reload',
+  M.restore(sameLabs) === true && drain() === 0, { reloads: reloads });
+const changedLabs = JSON.stringify({ schema: 2, app: 'embedded-c-roadmap',
+  state: { done: {}, notes: {}, marks: {}, interview: { answers: {} }, faults: { seen: {} },
+    labs: { [declared.K_PROTOS]: { stage: 3 } }, settings: { theme: 'dark' } } });
+resetImports();
+ok('importing changed lab state still reloads',
+  M.restore(changedLabs) === true && drain() === 1, { reloads: reloads });
+ok('the changed lab state really landed',
+  JSON.parse(store[declared.K_PROTOS]).stage === 3, store[declared.K_PROTOS]);
 
 console.log(fails ? '\n' + fails + ' FAILURE(S) of ' + checks : '\nall green (' + checks + ' checks)');
 process.exit(fails ? 1 : 0);

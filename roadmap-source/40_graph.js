@@ -6,6 +6,9 @@
   "use strict";
   var R = window.EmbeddedCRoadmap;
   if (!R) { return; }
+  /* esc comes from the app's public API — one definition, no drift. The fallback
+     only exists so this file still loads when the graph is opened standalone. */
+  var esc = R.esc || function (s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); };
   var NS = "http://www.w3.org/2000/svg";
   var W = 1000, H = 660;
   var STAGE_HUES = ["var(--link)", "var(--steel)", "var(--violet)", "var(--warn)", "var(--ok)", "var(--accent)", "var(--olive)"];
@@ -23,8 +26,15 @@
   var nodes = [], hubs = [], links = [], nodeById = {}, hubById = {}, stageLists = {};
   var svg, world, gE, gH, gN, tipEl, panelEl, frame;
   var T = { x: 0, y: 0, k: 1 };
+  /* Roving-tabindex keyboard traversal: kbdOrder is the roadmap reading order
+     (stage by stage), kbdIndex is the node that currently owns tabindex="0". */
+  var kbdOrder = [], kbdIndex = 0;
 
-  function esc(s) { return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
+  /* (There used to be a second `function esc()` right here. Because function
+     declarations hoist and the `var esc = R.esc || …` above then assigns over it,
+     the declaration was dead code that only looked like a second definition —
+     exactly the drift the comment at the top promises to avoid. scripts/lint.js now
+     scans this file as its own scope so it cannot come back.) */
   function mk(tag, attrs, parent) {
     var n = document.createElementNS(NS, tag);
     for (var a in attrs) { if (Object.prototype.hasOwnProperty.call(attrs, a)) { n.setAttribute(a, attrs[a]); } }
@@ -108,6 +118,11 @@
       return h;
     });
     nodes.forEach(function (n) { n.r = 5 + Math.min(n.deg, 12) * 0.55; });
+    /* Stable reading order for the keyboard: stage by stage, in roadmap order.
+       Taken once, so arrow keys do not reorder themselves as the layout settles. */
+    kbdOrder = [];
+    Object.keys(stageLists).sort(function (a, b) { return a - b; })
+      .forEach(function (s) { kbdOrder = kbdOrder.concat(stageLists[s]); });
   }
 
   /* ---------- forces ---------- */
@@ -214,16 +229,25 @@
       g.addEventListener("click", function (e) { e.stopPropagation(); spotlight(activeCluster === h.c.id ? null : h.c.id); });
       h.el = g;
     });
-    nodes.forEach(function (n) {
+    nodes.forEach(function (n, i) {
       var g = mk("g", { "class": "gnode", "data-id": n.id }, gN);
       mk("circle", { "class": "core", r: n.r.toFixed(1), fill: STAGE_HUES[n.stage % STAGE_HUES.length] }, g);
       var tx = mk("text", { "class": "nlabel", y: (n.r + 10).toFixed(1) }, g);
       tx.textContent = n.t.code;
+      /* A graph node is an interactive thing, so it says so and takes part in a
+         roving tabindex — otherwise the one view that is entirely about
+         relationships would be mouse-only. */
+      g.setAttribute("tabindex", i === 0 ? "0" : "-1");
+      g.setAttribute("role", "button");
+      renderNodeLabel(n, g);
+      g.addEventListener("focus", function () { kbdIndex = kbdOrder.indexOf(n); showNodeTip(n); });
+      g.addEventListener("blur", function () { tipEl.classList.remove("on"); });
       n.el = g;
       bindNode(n);
     });
     frame.insertBefore(svg, frame.firstChild);
     bindSvg();
+    bindKeys();
     syncDone();
     applyVisibility();
     applyFocus();
@@ -271,6 +295,52 @@
     });
     n.el.addEventListener("pointerleave", function () { tipEl.classList.remove("on"); });
   }
+  /* ---------- keyboard traversal ----------
+     Arrow Up/Down walk one stage's column (the layout's own reading order);
+     Arrow Left/Right move to the neighbouring stage, landing on the node nearest
+     the current height; Home/End jump to the ends; Enter/Space select and Escape
+     clears. Focus is real DOM focus, so the ring is the browser's own. */
+  function focusNode(n, announce) {
+    if (!n) { return; }
+    var prev = kbdOrder[kbdIndex];
+    if (prev && prev !== n) { prev.el.setAttribute("tabindex", "-1"); }
+    kbdIndex = kbdOrder.indexOf(n);
+    if (kbdIndex < 0) { kbdIndex = 0; }
+    n.el.setAttribute("tabindex", "0");
+    try { n.el.focus(); } catch (e) { /* older engines */ }
+    if (announce) { showNodeTip(n); }
+  }
+  function moveFocus(dir) {
+    var cur = kbdOrder[kbdIndex];
+    if (!cur) { focusNode(kbdOrder[0], true); return; }
+    if (dir === "up" || dir === "down") {
+      var list = stageLists[cur.stage] || [cur];
+      var i = list.indexOf(cur) + (dir === "down" ? 1 : -1);
+      if (i >= 0 && i < list.length) { focusNode(list[i], true); }
+      return;
+    }
+    var next = stageLists[cur.stage + (dir === "right" ? 1 : -1)];
+    if (!next || !next.length) { return; }
+    var best = next[0], bestD = Infinity;
+    next.forEach(function (n) { var dd = Math.abs(n.y - cur.y); if (dd < bestD) { bestD = dd; best = n; } });
+    focusNode(best, true);
+  }
+  function bindKeys() {
+    var arrows = { ArrowUp: "up", ArrowDown: "down", ArrowLeft: "left", ArrowRight: "right" };
+    svg.addEventListener("keydown", function (e) {
+      var k = e.key;
+      if (arrows[k]) { e.preventDefault(); moveFocus(arrows[k]); return; }
+      if (k === "Home") { e.preventDefault(); focusNode(kbdOrder[0], true); return; }
+      if (k === "End") { e.preventDefault(); focusNode(kbdOrder[kbdOrder.length - 1], true); return; }
+      if (k === "Enter" || k === " " || k === "Spacebar") {
+        e.preventDefault();
+        var cur = kbdOrder[kbdIndex];
+        if (cur) { select(selId === cur.id ? null : cur.id); }
+        return;
+      }
+      if (k === "Escape") { e.preventDefault(); select(null); spotlight(null); }
+    });
+  }
   function bindSvg() {
     svg.addEventListener("pointerdown", function (e) {
       if (e.target !== svg && e.target.closest && e.target.closest(".gnode,.ghub")) { return; }
@@ -299,14 +369,31 @@
       applyT();
     }, { passive: false });
   }
-  function showTip(n, e) {
+  function renderNodeLabel(n, g) {
+    g.setAttribute("aria-label", n.t.code + " " + n.t.t + (R.isDone(n.id) ? " (learned)" : ""));
+  }
+  function tipHtml(n) {
     var cl = (R.clusters().filter(function (c) { return c.topics.indexOf(n.id) !== -1; }).map(function (c) { return c.label; })).join("; ");
-    tipEl.innerHTML = '<span class="c">' + esc(n.t.code) + (R.isDone(n.id) ? " \u00b7 learned" : "") + "</span>" + esc(n.t.t) +
+    return '<span class="c">' + esc(n.t.code) + (R.isDone(n.id) ? " \u00b7 learned" : "") + "</span>" + esc(n.t.t) +
       (cl ? '<span class="c" style="margin-top:4px">' + esc(cl) + "</span>" : "");
+  }
+  function placeTip(left, top) {
     var b = frame.getBoundingClientRect();
-    tipEl.style.left = Math.min(b.width - 270, e.clientX - b.left + 14) + "px";
-    tipEl.style.top = (e.clientY - b.top + 14) + "px";
+    tipEl.style.left = Math.max(4, Math.min(b.width - 270, left)) + "px";
+    tipEl.style.top = Math.max(4, Math.min(b.height - 64, top)) + "px";
     tipEl.classList.add("on");
+  }
+  function showTip(n, e) {
+    tipEl.innerHTML = tipHtml(n);
+    var b = frame.getBoundingClientRect();
+    placeTip(e.clientX - b.left + 14, e.clientY - b.top + 14);
+  }
+  /* Same tooltip, positioned from the node element rather than a pointer, so what
+     a keyboard user sees matches what hovering shows. */
+  function showNodeTip(n) {
+    tipEl.innerHTML = tipHtml(n);
+    var nb = n.el.getBoundingClientRect(), b = frame.getBoundingClientRect();
+    placeTip(nb.left - b.left + nb.width + 8, nb.top - b.top);
   }
 
   /* ---------- selection / spotlight ---------- */
@@ -476,7 +563,12 @@
 
   R.onHook("view:graph", ensure);
   R.onHook("graph:cluster", function (id) { ensure(); spotlight(id); });
-  R.onDoneChange(function () { if (built) { syncDone(); refreshClusterChips(); } });
+  R.onDoneChange(function () {
+    if (!built) { return; }
+    syncDone(); refreshClusterChips();
+    /* Refresh the spoken label of every node, so "learned" is announced too. */
+    nodes.forEach(function (n) { renderNodeLabel(n, n.el); });
+  });
   R.graph = {
     focus: function (id) { ensure(); if (nodeById[id]) { select(id); } },
     spotlight: function (id) { ensure(); spotlight(id); },
