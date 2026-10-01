@@ -17,13 +17,18 @@ CDN and no external toolchain.
   cannot leak into the teaching stages.
 - **Linker & Startup** uses one fixed Cortex-M4 memory model to teach `MEMORY`, `SECTIONS`,
   VMA/LMA, linker-generated symbols, the vector table, `.data` initialization, `.bss` zeroing,
-  startup flow, and a sandbox where sections are dragged between FLASH and RAM.
+  startup flow, and a sandbox where sections are dragged between FLASH and RAM. A ninth stage,
+  *Reading a `.s`*, teaches the assembly the build hands you: `startup.s`'s 58 lines classified
+  by kind, four real instruction lines decoded field by field, and Thumb-2, with the reset
+  pseudocode guarded to describe the same program as the file.
 - **Peripheral Playground** is a ten-stage live Cortex-M4 model: MMIO and the clock tree,
-  GPIO (including a clickable PUPDR), a timer as a frequency divider (with a real CCR row),
-  the interrupt chain (DIER × ISER/ICER × PRIMASK, with the set/clear pair taught
-  truthfully), the write-only atomic BSRR, priority nesting, the read-modify-write race,
-  a graded bring-up challenge (graded on observed behaviour over time as well as register
-  state), and a preset playground.
+  GPIO (including a clickable PUPDR), a timer as a frequency divider (with a real CCR row and
+  a live deadline readout), the interrupt chain (DIER × ISER/ICER × PRIMASK, with the
+  set/clear pair taught truthfully), the write-only atomic BSRR, priority nesting, the
+  read-modify-write race, a graded bring-up challenge, and a preset playground. The bring-up
+  challenge is graded on observed behaviour over time as well as register state: a steady
+  cadence, fresh entries, the rate that was configured, **and** whether the handler's cost fits
+  the period (`PF_ISR_MS` is a model device, labelled as such — a real ISR is microseconds).
 - **Protocol Lab** builds twelve stages across five families (Basics, UART, I²C, SPI, CAN) on
   one shared logic analyser, with a scrubber over each finished capture. Three renderers share
   one playhead contract: a per-bit box trace (UART framing, CAN arbitration), a multi-lane
@@ -83,8 +88,8 @@ app will not shrink past its 1050px minimum).
 | `1b_data_topics.js` | Canonical topic schema: stage identity, study approach, visual, conceptual links and interview coverage |
 | `20_app.js` | App state, storage, backup, markdown, notes/journals, roadmap, dashboard, practice, boot. Opens the `<script>` tag and the app IIFE |
 | `21_lab_compile.js` | Compilation Path lab (teaching model + real-toolchain panel and bench, two reports sharing one stage rail) |
-| `22_lab_linker.js` | Linker & Startup lab, including the placement sandbox |
-| `23_lab_periph.js` | Peripherals lab (staged Cortex-M4 curriculum, behaviour tape) |
+| `22_lab_linker.js` | Linker & Startup lab: 9 stages, including the placement sandbox and the *Reading a `.s`* stage |
+| `23_lab_periph.js` | Peripherals lab (staged Cortex-M4 curriculum; behaviour tape + deadline model) |
 | `24_lab_protocols.js` | Protocols lab (signals, UART, I²C, SPI and CAN on the shared logic analyser) |
 | `25_api.js` | Public API (`window.EmbeddedCRoadmap`); closes the IIFE and `</script>` |
 | `40_graph.js` | Concept graph renderer (own `<script>`, reads the app through its public API) |
@@ -129,14 +134,19 @@ hover/selection so the full 163-topic graph remains readable.
 
 ## Tests and guards
 
-- `npm test` runs every zero-dependency spec in `../specs/` (15 files, 774 checks); each one
+- `npm test` runs every zero-dependency spec in `../specs/` (19 files, 1143 checks); each one
   slices its subject out of a fragment with marker strings, stubs storage, and runs the slice
   in a `vm` context. `protocol_stages.spec.js` and `periph_regs.spec.js` go further and
   render every stage of their lab headlessly (`prBody()`/`pfStageBody()` are pure functions
   of their models), which is the only guard that catches a stage body throwing — a failure
   the app shows as a tab that simply stops responding. `periph_regs.spec.js` pins the
   register semantics the lab teaches: ISER write-1-to-set, ICER write-1-to-clear and
-  write-only, BSRR's atomic halves, PUPDR whole-field cycles.
+  write-only, BSRR's atomic halves, PUPDR whole-field cycles. `periph_deadline.spec.js`
+  pins the time base (remainder-carrying, so the counter matches `pfUpdateRateHz` at every
+  PSC/ARR), the handler cost and the four claims behind `pfTapeStillRunning()`;
+  `read_asm.spec.js` re-derives the `startup.s` line classification and checks every decode;
+  and `startup_pseudocode.spec.js` keeps the reset pseudocode and the file it hands the
+  learner describing the same program.
 - Negative controls are expected, not optional: a new guard should be shown to fail on a
   deliberately patched copy of its fragment (in a scratch directory inside the repo, never
   `/tmp`) before it is trusted.

@@ -63,8 +63,11 @@ the same backup file as the rest of your lab progress.
   artifacts and observations (provenance labelled, per-stage ✓/✕ marks on the rail), and a
   failed build lands on the first stage that stopped.
 - **Linker & Startup** — an interactive Cortex-M4 memory map: rule-by-rule linker-script
-  inspector, section placement, startup flow, and a **sandbox** where you drag sections
-  between FLASH/RAM and watch VMA/LMA, usage bars and failure diagnostics update live.
+  inspector, section placement, startup flow, a **sandbox** where you drag sections between
+  FLASH/RAM and watch VMA/LMA, usage bars and failure diagnostics update live, and a final
+  **reading a `.s`** stage that classifies `startup.s`'s 58 lines by kind (only some are
+  instructions), takes four real instruction lines apart field by field, and explains Thumb-2 —
+  the `.thumb` on line 6 the curriculum had asserted without ever explaining.
 - **Peripherals** — a 10-stage curriculum on a live Cortex-M4 model: clock-gated register
   writes, GPIO MODER/ODR/IDR, a timer as a frequency divider, the interrupt chain
   (DIER × ISER × PRIMASK), priority nesting with a swim-lane timeline, the read-modify-write
@@ -72,8 +75,13 @@ the same backup file as the rest of your lab progress.
   time**, not only register state: a bounded event tape records every handler entry/exit,
   ISR-driven pin write and lost update, and a visible *Behaviour tape* card shows the same
   cadence and freshness statistics the grader uses — a handler that fired once and stopped
-  cannot pass by leaving the right bits set. A "Your code" panel reverse-engineers every click
-  into the canonical C statement (e.g. `RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;`).
+  cannot pass by leaving the right bits set. It also grades **the deadline**: the period the
+  timer generates against the time one handler holds the CPU (400 ms in this model, labelled
+  as a model device rather than a hardware figure). Regular but late fails, so configure a
+  rate the handler cannot meet and the card says so; the timer row shows the live deadline
+  (`period N ms vs 400 ms handler — x % CPU`, green or red). A "Your code" panel
+  reverse-engineers every click into the canonical C statement
+  (e.g. `RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;`).
 - **Protocols** *(newest)* — 12 stages grouped into five families
   (**Basics / UART / I²C / SPI / CAN**) with a stage tab under each, all built on one shared
   logic-analyser instrument:
@@ -239,7 +247,7 @@ its arbitration, stuffing, ACK and stretch events all carry sim-clock stamps. Ne
   API, resume-where-you-left-off, and per-stage goal chips on the Dashboard.
 - **Tooling hardening** — done since this list was first written: native save/open dialogs,
   an in-repo `cargo clippy --all-targets -- -D warnings` gate, and a built-HTML size budget
-  in `validate_build.js` (1500 KB; currently ~1158 KB). The next engineering items
+  in `validate_build.js` (1500 KB; currently ~1215 KB). The next engineering items
   (automated negative controls, an artifact fingerprint, tests for the build contracts
   themselves) are catalogued in [features.md](features.md).
 
@@ -247,11 +255,13 @@ Recent hardening (see `problems.md` / `improvements.md`): the CSP and vendored f
 single generated version string, a correct multi-language `hl()` highlighter, a seeded
 uniform `shuffle()`, a non-blocking `notice()` in place of `window.alert`, accessibility
 part 2 (skip-link, dashboard counter announcements, concept-graph keyboard traversal),
-**behaviour grading** for the peripherals bring-up challenge, and nine new spec files over
-the lab models (15 total). A verified stage goal also no longer loses its confirmation to
-the re-render that follows it (`problems.md` P10), and the peripherals register bank now
-teaches truthful access semantics — ISER write-1-to-set with a write-only ICER partner,
-the write-only atomic BSRR, a clickable PUPDR and a real CCR row (`problems.md` P15–P17).
+**behaviour grading** for the peripherals bring-up challenge, deadline grading on top of it,
+the linker lab's `startup.s` reader's guide, and new spec files over the lab models (19
+total). A verified stage goal also no longer loses its confirmation to the re-render that
+follows it (`problems.md` P10); the peripherals register bank now teaches truthful access
+semantics — ISER write-1-to-set with a write-only ICER partner, the write-only atomic BSRR,
+a clickable PUPDR and a real CCR row (`problems.md` P15–P17); and the peripherals time base,
+handler cost and deadline are honest (`problems.md` P19–P22).
 
 ---
 

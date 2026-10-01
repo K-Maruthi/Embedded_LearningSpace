@@ -79,11 +79,11 @@ optionally run a real `arm-none-eabi-gcc` build.
 |-|-|
 | 7 roadmap stages · **163 topics** · 5 failure clusters | the data model, all in `10…15_data_*.js` + `1b_data_*.js` |
 | 9 views · 4 practice tracks · 12 rail buttons | `02_body.html` + `01_head.html` |
-| 4 labs, **8 + 8 + 10 + 12 = 38 stages**, 20 of them graded | `21`–`24` |
+| 4 labs, **8 + 9 + 10 + 12 = 39 stages**, 21 of them graded | `21`–`24` |
 | 12 `localStorage` keys, 1 versioned JSON envelope (`DATA_SCHEMA = 2`) | `20_app.js` |
-| 15 spec files, **774 checks**, 0 dependencies | `specs/` |
+| 19 spec files, **1143 checks**, 0 dependencies | `specs/` |
 | 7 Tauri commands, 7 pipeline stages, 3 example sources | `src-tauri/` |
-| built HTML ≈ 1.16 MB against a 1500 KB budget | `validate_build.js` |
+| built HTML ≈ 1.21 MB against a 1500 KB budget | `validate_build.js` |
 
 ---
 
@@ -536,10 +536,10 @@ copying verbatim into any fifth lab.
 | | Compile | Linker | Peripherals | Protocols |
 |---|--------|--------|-------------|-----------|
 | view id | `compile` | `playground` | `periph` | `protocols` |
-| stage ids | 7 tools + `check` | `mcu…sandbox` (8, string ids) | 1–10 | 1–12 (non-sequential) |
+| stage ids | 7 tools + `check` | `mcu…sandbox` + `readasm` (9, string ids) | 1–10 | 1–12 (non-sequential) |
 | stage table | `CLAB_STAGES` | `LINK_STAGES` | `PF_STAGE_META` | `PR_STAGE_META` |
 | storage key | `bench.v1` | `lksandbox.v1` | `periph.v1` | `protocols.v1` |
-| graded on | `data-ok` keys | `data-ok` keys | state **+ behaviour tape** | `data-ok`-style goals 1–12 |
+| graded on | `data-ok` keys | `data-ok` keys | state **+ behaviour tape + deadline** | `data-ok`-style goals 1–12 |
 | tick | none (build-driven) | none (local model) | `pfTick`, 100 ms | one shared ticker, `prXxxTick()` per family |
 
 ### Two details that took real work
@@ -551,10 +551,15 @@ leaves every register reading correctly. So `periph.tape` is a bounded ring
 (`enter`/`led` in `pfEnterIsr`, `exit` in `pfNvicTick`, `lost` in `pfRaceTick`).
 Pure predicates (`pfTapeGaps`, `pfTapeCadence`, `pfTapeAge`, `pfTapeSteady`,
 `pfTapeVerdict`) grade **cadence** (newest 8 entries steady within ±35 % of the
-median) and **freshness** (newest entry ≤ 3 s old) separately, and one gate —
-`pfTapeStillRunning()` — is read by the goal card, the nine-row checklist and the
-visible *Behaviour tape* card, so those three cannot disagree about what "working"
-means.
+median) and **freshness** (newest entry ≤ 3 s old) separately, and `pfTapeVerdict()`
+names which claim broke. A third and fourth claim close the hole cadence alone leaves
+open: `pfTapeOnPeriod()` asks whether the measured cadence matches the rate that was
+requested, and `pfIsrDeadline()` compares the period against the time one handler
+holds the CPU — because a handler that overruns its own period still produces
+beautifully even gaps, evenly spaced at the *cost* rather than the requested rate. All
+four are read through the one gate `pfTapeStillRunning()`, which the goal card, the
+nine-row checklist and the visible *Behaviour tape* card share, so those three cannot
+disagree about what "working" means.
 
 **Non-sequential stage ids (protocols).** `PR_STAGE_META` is ordered
 `1, 7, 2, 3, 4, 5, 6, 10, 8, 9, 11, 12` — the *tab* order follows the teaching
@@ -584,7 +589,7 @@ right-hand column is what you lose without it.
 
 | Guard | Command | Protects | Found |
 |-------|---------|----------|-------|
-| Behaviour specs | `npm test` | 15 files / 774 checks over models **and** shell | 9 real bugs on first run |
+| Behaviour specs | `npm test` | 19 files / 1143 checks over models **and** shell | 9 real bugs on first run |
 | Lint | `npm run lint` | duplicate declarations in both scopes, duplicate API keys, console, TODO, tabs | 2 dead declarations |
 | Build validation | `npm run build:roadmap` | JS syntax per fragment + assembled, rail ↔ view both ways, practice sub-nav ↔ sections, journal hosts ↔ mounts ↔ `JR_TABS`, graded question `data-ok`, version token, content breakpoints ≥ 812 px, tag balance, one `<style>`, one `</html>`, 1500 KB budget | 1 `#define directory` plural, 1 wrong quiz key |
 | Version sync | `node scripts/sync-version.js --check` | `package.json` → `tauri.conf.json` → `Cargo.toml` | version drift |
@@ -595,9 +600,10 @@ right-hand column is what you lose without it.
 ### The negative-control habit
 
 The most distinctive practice here: **a new guard is not trusted until it has been
-shown to fail on a deliberately patched copy.** The docs record ~40 such runs
+shown to fail on a deliberately patched copy.** The docs record ~80 such runs
 (8 checks fail when ISER reverts to plain assignment, 4 when the CAN bus becomes
-an OR, 3 when the I²C address helper reverts, and so on).
+an OR, 3 when the I²C address helper reverts, 37 of 37 when the peripherals time
+base and deadline are mutated, and so on).
 
 The recipe, from `ongoing.md` §5: copy the spec *and* the fragment into a scratch
 directory **inside the repo** (`/tmp` resolves awkwardly on this Windows setup),
@@ -617,12 +623,12 @@ vm.runInContext(src.slice(from, to) + '\nthis.prResolve=prResolve; …', ctx);
 ```
 
 The marker strings are **load-bearing**, and the project guards them properly:
-**12 of the 15 specs** `throw` when a marker is missing or the range inverts,
+**16 of the 19 specs** `throw` when a marker is missing or the range inverts,
 so renaming a section comment fails the suite loudly instead of turning a spec
 into a silent no-op. The three exceptions are deliberate — `lab_quiz.spec.js`
-reads the whole fragment and greps it, and `protocol_stages.spec.js` /
-`helpers.spec.js` either evaluate everything or check their markers inline
-(`helpers` does throw, on `"could not find the esc/hl/shuffle markers"`).
+reads the whole fragment and greps it, `protocol_stages.spec.js` evaluates the
+model it is handed, and `read_asm.spec.js` brace-matches its data structures and
+reports a missing one as a failed check rather than a throw.
 
 The real exposure is not the markers but the **stubs**. Six specs hand-write
 their own `esc` into the `vm` context:
@@ -637,7 +643,7 @@ against the stale copy. One shared exported stub would close it.
 
 ### Drift guards
 
-Three specs deliberately recompute numbers the prose states, so a teaching claim
+Several specs deliberately recompute facts the prose states, so a teaching claim
 cannot drift from the model that implements it:
 
 - `periph_model.spec.js` reads the graded Hz bands, the `blink` preset's PSC/ARR,
@@ -645,9 +651,18 @@ cannot drift from the model that implements it:
   checks each against `pfUpdateRateHz()`. This is how the P7 off-by-one
   (`100/50 = 2 Hz` vs the real `1000/((PSC+1)·(ARR+1)) = 1.96 Hz`) became
   impossible to reintroduce.
+- `periph_deadline.spec.js` recomputes the time base and the deadline maths, and
+  fails if the prose, the timer card or the checklist stop agreeing with
+  `pfUpdateRateHz()` / `pfIsrDeadline()`.
 - `linker_sandbox.spec.js` recomputes `_estack`, the `1M` flash length and the
   `128K` RAM length from the constants and requires the *generated* script to
   contain them.
+- `read_asm.spec.js` re-derives the `startup.s` classification from the definition
+  of each line kind, checks every decode against the line it names, and pins the
+  Thumb-2 pointers — so editing the file underneath the prose fails.
+- `startup_pseudocode.spec.js` requires the reset pseudocode and the real
+  `startup.s` to name the same symbols and call the same targets (this is how the
+  `SystemInit` bug, `problems.md` P18, is kept out).
 - `lab_compile.spec.js` pins the agreement across four places: the rail,
   `CLAB_TITLES`, `COMPILE_DATA` and the stage ids in `pipeline.rs`.
 

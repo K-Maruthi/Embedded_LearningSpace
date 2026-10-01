@@ -6,14 +6,17 @@ here is cross-checked against `todo.md` — see [Cross-check](#cross-check-with-
 so nothing already fixed there is repeated, and each of its completed items was verified
 against the code rather than trusted.
 
-Status: **all seventeen are fixed.** Two of them (P8, P9) were found *by the new specs and
+Status: **all twenty-two are fixed.** Two of them (P8, P9) were found *by the new specs and
 lint rules written during this pass*, which is the point of the pass; P10 was found by
 tracing the new I11 grading path end to end in the live app; P11 was found by the
 compilation-path spec written for the bench legibility pass; P12 and P14 were found by
 the stage-render spec written for the protocol pass (P13 by driving a scrub backwards in the
-live app); and **P15–P17 were found by a register-semantics audit of the peripherals lab**, 
+live app); **P15–P17 were found by a register-semantics audit of the peripherals lab**,
 then caught (and one more, the pin-cell `undefined`, re-caught) by the spec written for the
-fix — see [improvements.md](improvements.md) I13.
+fix — see [improvements.md](improvements.md) I13; **P18 was found by the startup-pseudocode
+drift guard** written for the linker-reader pass (I14); and **P19–P22 were found by a
+time-base audit of the peripherals lab** — the clamped counter step, the handler cost quoted
+as fact, the saturated-ISR gate and the unreachable stage-7 demo — fixed in I15.
 
 **In order:** P1 wrong quiz keys · P2 version drift · P3 highlighter · P4 shuffles ·
 P5 `window.alert` · P6 duplicate API key · P7 doc/model drift · P8 negative reserve ·
@@ -411,6 +414,112 @@ accessibility tree, caught by the no-`undefined` guard on every rendered stage.
 
 ---
 
+## P18 · 🟠 The Linker lab's reset pseudocode taught an undefined `SystemInit` — **FIXED**
+
+**Where:** [22_lab_linker.js](roadmap-source/22_lab_linker.js) (the reset-walk pseudocode card
+and the "what the linker supplied" panel)
+
+**Found by:** [specs/startup_pseudocode.spec.js](specs/startup_pseudocode.spec.js), written as
+a drift guard and naming this as the regression it exists to prevent.
+
+The lab teaches the reset sequence as pseudocode and hands the learner the real
+`src-tauri/src/examples/startup.s` in the Compilation Path's bench editor. Those two are
+supposed to be the same program. They were not: the pseudocode ended `bl SystemInit` followed
+by `bl main`, while `startup.s` contained only `bl main`. `SystemInit` is defined **nowhere** in
+the project — not in `startup.s`, not in `main.c`, not in `linker.ld`. A learner who typed the
+app's own lesson into the editor got `undefined reference to SystemInit` from the real linker:
+the lesson could not be typed.
+
+**Fix.** The pseudocode now ends in `bl main` and names only symbols the file actually uses.
+The spec is one-directional on purpose — `startup.s` may legitimately contain more than the
+reset walk covers (`_estack`, the vector table, the local `copy_data`/`zero_bss`/`hang`
+labels) — but the walk may not name a symbol or call target the file does not have. A
+`no SystemInit call survives` check names the regression directly.
+
+---
+
+## P19 · 🟠 The peripheral timer ran at a rate the card did not print — **FIXED**
+
+**Where:** [23_lab_periph.js](roadmap-source/23_lab_periph.js) (`pfAdvanceTimer`)
+
+**Found by:** the peripherals time-base audit that became I15, not by a spec — the older
+`periph_model.spec.js` slices only `pfUpdateRateHz()`, so it never drove a tick through the
+counter at all.
+
+The counter gained `Math.max(1, Math.round(PF_CLK_PER_TICK / (PSC + 1)))` counts per tick — a
+clamped whole count. For any divisor over 100 that clamps to 1, so a 250-count divisor ran the
+counter at 1/250th of the rate `pfUpdateRateHz()` reported: 0.10 Hz delivered against 0.04 Hz
+claimed. The card next to PSC, the stage-9 goal and the stage-5 hint **all** read
+`pfUpdateRateHz()`, and stage 5's hint actively recommended "factors of ~500–2000" — steering
+learners straight into the range where the model disagreed with itself.
+
+**Fix.** The fractional remainder rides in `T.acc`, so `pfUpdateRateHz()` is true for every
+PSC/ARR pair instead of only the divisors that divide a tick evenly. `PF_MAX_ROLLS` bounds one
+tick's rollovers and `T.merged` counts the surplus past UIF's single bit — because "the
+peripheral generated more events than the CPU could take" is the whole point of the deadline
+check below.
+
+---
+
+## P20 · 🟠 The handler cost was stated as a hardware fact — **FIXED**
+
+**Where:** [23_lab_periph.js](roadmap-source/23_lab_periph.js) (`PF_ISR_MS` and every card that
+quotes it)
+
+**Found by:** the same audit.
+
+Prose said "the TIM2 handler holds the CPU ~400 ms" with no qualifier. A real ISR that clears a
+flag and toggles an ODR bit costs a couple of microseconds; 400 ms is four whole sim frames,
+chosen so preemption is *visible* at this lab's 10 Hz tick. Nothing said so, so a learner
+reasonably concludes handlers cost 400 ms.
+
+**Fix.** `PF_ISR_MS` is documented in the source as a visibility device, not a cost you would
+measure, and every card that quotes it says "in this model". The stage-9 hint now says
+outright that 400 ms is the model standing in for a microsecond-scale handler.
+
+---
+
+## P21 · 🔴 A saturated ISR passed the behaviour gate — **FIXED**
+
+**Where:** [23_lab_periph.js](roadmap-source/23_lab_periph.js) (`pfTapeStillRunning`,
+`pfTapeVerdict`, the stage-9 goal, checklist and rate band)
+
+**Found by:** the same audit; this is the one that mattered.
+
+The behaviour tape graded **cadence** (gaps regular) and **freshness** (newest entry recent).
+A handler that overruns its own period produces beautifully even gaps — evenly spaced at the
+*cost*, not the requested rate. Configure 4 Hz against the 400 ms handler: it misses its 250 ms
+deadline, re-enters the instant it exits, and the tape read median 400 ms / steady / "behaviour
+gate met" while the card still said 4.00 Hz. The learner was told they built a 4 Hz blink; the
+CPU was 160 % committed to the ISR and `main()` never ran. The stage-9 band compounded it by
+accepting up to 2.6 Hz (385 ms), a rate this model can never deliver.
+
+**Fix.** `pfIsrDeadline(T)` returns `{periodMs, costMs, load, met}` and `pfTapeOnPeriod()`
+asks whether the measured cadence matches the rate that was requested. `pfTapeStillRunning()`
+now requires steady **and** fresh **and** on-period **and** deadline met, and `pfTapeVerdict()`
+names which claim broke, so regular-but-late fails. The band is 1.5–2.4 Hz, and the timer row
+shows the deadline live (`.dl-ok` / `.dl-bad`).
+
+---
+
+## P22 · 🟡 Stage 7's one-click demo could not reach stage 7's goal — **FIXED**
+
+**Where:** [23_lab_periph.js](roadmap-source/23_lab_periph.js) (`pfArmNestDemo`)
+
+**Found by:** the same audit, while proving the deadline on the stage that teaches nesting.
+
+The nesting demo armed TIM3 at 5 Hz (200 ms) over the 400 ms handler. TIM3 therefore overran
+its own period, held the CPU continuously, and TIM2 was never dispatched — zero TIM2 entries,
+so the stage's own `nestCount >= 1` goal was unreachable from its own button. The
+prose promising "enter → ⚡ preempt → exit → resume → exit" described something the button
+could not produce.
+
+**Fix.** TIM3 is PSC 9 / ARR 79 (1.25 Hz, 800 ms); TIM2 stays 2 Hz (500 ms). Both periods
+outlast the handler, so TIM2 runs and is preempted exactly once. The 5 Hz case stays in the
+card as the counter-example: a handler that overruns its period starves everything below it.
+
+---
+
 ## Cross-check with `todo.md`
 
 **Verified as genuinely done in the code** (not just ticked):
@@ -438,6 +547,8 @@ accessibility tree, caught by the no-`undefined` guard on every rendered stage.
 **Found by the compilation-path spec:** P11.
 **Found by the register-semantics audit and its spec:** P15, P16, P17 (the spec's first run
 also re-caught the pin-cell `undefined`, filed inside P17).
+**Found by the startup-pseudocode drift guard:** P18.
+**Found by the peripherals time-base audit:** P19, P20, P21, P22.
 
 **Carried forward from `todo.md` into `improvements.md`:** §19's second half (now done) and
 §23 (now done).
@@ -450,16 +561,17 @@ also re-caught the pin-cell `undefined`, filed inside P17).
 ## Verification
 
 ```
-npm test                all green, 16 spec files
-                        (backup_roundtrip, dash_progress, helpers, journal_nav,
+npm test                all green, 19 spec files
+                        (backup_roundtrip, boot_ipc, dash_progress, helpers, journal_nav,
                          lab_compile, lab_quiz, linker_sandbox, markdown_safety,
-                         note_editor, periph_model, periph_regs, periph_tape,
-                         protocol_model, protocol_stages, rail_nav)
+                         note_editor, periph_deadline, periph_model, periph_regs,
+                         periph_tape, protocol_model, protocol_stages, rail_nav, read_asm,
+                         startup_pseudocode) — 1143 checks
 npm run lint            clean (both IIFE scopes, public-API keys, console/TODO/tabs)
 npm run build:roadmap   Validation OK: fragments, JavaScript syntax, rail and view
                         targets, journal hosts, quiz answer keys, version
                         single-sourcing, content breakpoints, graph hooks, built HTML,
-                        and the 1500 KB HTML size budget (measured 1158 KB)
+                        and the 1500 KB HTML size budget (measured 1215 KB)
 node scripts/sync-version.js --check    in sync at 1.0.0
 cargo test              10 passed, 1 ignored (needs a real ARM toolchain by design)
 cargo clippy --all-targets -- -D warnings    clean
@@ -478,7 +590,15 @@ plain `ISER0 = value` assignment fails 8 checks; making ICER a no-op fails 4; sw
 BSRR halves fails 4; letting the pull cycle reach the reserved 11 fails 2; emitting the BS
 macro for a reset click fails 1; the "reserved in this model" title returns fails 2; the
 pin-cell `undefined` interpolation returns fails 1; dropping the CCR row fails 1; unsharing
-the peripheral resolver fails 1; clicking a set ISER bit clearing in place fails 1.
+the peripheral resolver fails 1; clicking a set ISER bit clearing in place fails 1. For the
+linker-reader pass, `startup_pseudocode.spec.js` fails if the pseudocode names a call target
+or symbol `startup.s` does not have (the `SystemInit` regression is named by its own check),
+and `read_asm.spec.js` fails if `asmClassify` is reordered, a decode's line number is moved,
+or a Thumb-2 pointer stops naming a real line. For the peripherals time-base pass, **37
+negative controls** were run against a scratch copy of `23_lab_periph.js` (pointed at with
+`PERIPH_SRC`) and all 37 were caught: the clamped counter step, a dropped remainder, a missing
+`T.merged`, the cost un-qualified, the gate grading cadence alone, the band left at 2.6 Hz and
+the stage-7 demo left at 5 Hz each fail one or more checks.
 
 Live checks in the running app: the Compile Path `q2` now marks **Compiler wrong** and
 **Linker correct**; the Linker lab `m2` marks **Flash .text wrong** and **RAM .bss

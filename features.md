@@ -131,14 +131,20 @@ Two modes sit on top of that one rail, and the split is deliberate:
 The report split, provenance labels, parsers, failure landing and the rail ↔ `CLAB_TITLES` ↔
 Rust stage-id agreement are pinned by [specs/lab_compile.spec.js](specs/lab_compile.spec.js).
 
-**Linker & Startup** ([22_lab_linker.js](roadmap-source/22_lab_linker.js)) — 8 stages:
-MCU → Files → Script → Memory → Startup → Build → Check → **Sandbox**. The script stage
-explains the linker script rule by rule; memory shows placement; startup walks the
-reset sequence; the sandbox is a local placement model where sections can be dragged between
+**Linker & Startup** ([22_lab_linker.js](roadmap-source/22_lab_linker.js)) — 9 stages:
+MCU → Files → Script → Memory → Startup → Build → Check → **Sandbox** → **Reading a `.s`**.
+The script stage explains the linker script rule by rule; memory shows placement; startup walks
+the reset sequence; the sandbox is a local placement model where sections can be dragged between
 FLASH/RAM and VMA/LMA, usage bars, the generated linker script and failure diagnostics update
-live. Sizes *and* the stack/heap reserves are clamped by one `lksClampSize()` (a negative
-reserve used to bend the RAM total); the maths is pinned by
-[specs/linker_sandbox.spec.js](specs/linker_sandbox.spec.js).
+live. The last stage teaches reading the assembly the build hands you: `startup.s`'s 58 lines
+classified by kind (only some are instructions — the vector table's `.word` directives emit
+bytes but are not code), four real instruction lines taken apart field by field, and
+**Thumb-2** — the part line 6's `.thumb` had been asserting without explanation. Sizes *and*
+the stack/heap reserves are clamped by one `lksClampSize()` (a negative reserve used to bend
+the RAM total); the maths is pinned by
+[specs/linker_sandbox.spec.js](specs/linker_sandbox.spec.js), the reader's guide by
+[specs/read_asm.spec.js](specs/read_asm.spec.js), and the reset pseudocode ↔ `startup.s`
+agreement by [specs/startup_pseudocode.spec.js](specs/startup_pseudocode.spec.js).
 
 **Peripheral Playground** ([23_lab_periph.js](roadmap-source/23_lab_periph.js)) — a 10-stage
 curriculum on a live Cortex-M4 model, ticked every 100 ms (`pfTick`, 1 kHz scaled to
@@ -160,10 +166,22 @@ striped — distinct from true read-only bits.
 Grading (`PF_GOALS` 2–9) is predicates over the live register state with per-stage hints;
 stage 9 additionally grades **behaviour over time** — a bounded event tape
 (`periph.tape`, ring of 240 `{t,k,d}`) records handler `enter`/`exit`, ISR-driven `led` writes
-and `lost` updates, and `pfTapeStillRunning()` requires N entries on a steady cadence whose
-newest entry is fresh. The goal, the nine-row checklist and the visible *Behaviour tape* card
-all read that one gate. Every click is also reverse-engineered into the canonical C statement
-in a *Your code* panel (`RCC->AHB1ENR |= …`).
+and `lost` updates. `pfTapeStillRunning()` requires four separate claims: N entries on a steady
+cadence, the newest entry fresh, the cadence matching **the rate that was configured**
+(`pfTapeOnPeriod`), and the **deadline met** (`pfIsrDeadline`: the period the timer generates
+against the time one handler holds the CPU). Regular-but-late fails, and `pfTapeVerdict()`
+names which claim broke. The goal, the nine-row checklist and the visible *Behaviour tape*
+card all read that one gate. Every click is also reverse-engineered into the canonical C
+statement in a *Your code* panel (`RCC->AHB1ENR |= …`).
+
+The **time base** carries its fractional remainder (`T.acc`), so `pfUpdateRateHz()` is exact at
+every PSC/ARR, and one tick's surplus rollovers are counted (`T.merged`, bounded by
+`PF_MAX_ROLLS`) rather than lost to UIF's single bit. The timer row shows the deadline live —
+`period N ms vs 400 ms handler — x % CPU`, green or red (`.dl-ok` / `.dl-bad`). `PF_ISR_MS = 400`
+is labelled a **model device** throughout: a real ISR is microseconds, and 400 ms is four sim
+frames chosen so preemption is visible at the 10 Hz tick. The model tops out at 2.5 Hz, which is
+why stage 9's band is 1.5–2.4 Hz. All of it is pinned by
+[specs/periph_deadline.spec.js](specs/periph_deadline.spec.js).
 
 **Protocol Lab** ([24_lab_protocols.js](roadmap-source/24_lab_protocols.js)) — 12 graded
 stages in 5 families on one shared logic-analyser instrument:
@@ -261,13 +279,15 @@ real Cortex-M / AAPCS toolchain behaviour (deliberately nothing compiled live).
   assembled IIFE, exactly one `<style>`, rail ↔ view agreement, journal hosts, every lab
   stage's journal host, every graded question's `data-ok` key, `__APP_VERSION__`
   single-sourcing, tag balance, and an **HTML size budget** (`HTML_BUDGET_KB = 1500`,
-  currently ~1094 KB).
-- **Specs** — 13 zero-dependency spec files (`npm test`, orchestrated by `specs/run.js`,
-  ~502 checks) that slice their subject out of the fragments with marker strings, stub
+  currently ~1215 KB).
+- **Specs** — 19 zero-dependency spec files (`npm test`, orchestrated by `specs/run.js`,
+  **1143 checks**) that slice their subject out of the fragments with marker strings, stub
   `rd`/`wr`/`pfRenderLive`, and `vm.runInContext` the slice, so there is no framework and
-  nothing to install: shell behaviour (rail, journals, notes, markdown, backup, dashboard)
-  plus the lab models themselves (quiz keys, helpers, linker sandbox, peripherals, behaviour
-  tape, protocols, and the compilation-path report split and output parsers).
+  nothing to install: shell behaviour (rail, journals, notes, markdown, backup, dashboard,
+  boot IPC) plus the lab models themselves (quiz keys, helpers, the linker sandbox and its
+  `startup.s` reader's guide + pseudocode agreement, the peripherals register semantics,
+  behaviour tape and deadline model, the protocols, and the compilation-path report split and
+  output parsers).
 - **Lint** — `scripts/lint.js` fails on duplicate declarations in either IIFE scope, duplicate
   public-API keys, console statements, TODOs and tabs.
 - **Version** — `scripts/sync-version.js` keeps `package.json` → `tauri.conf.json` →
@@ -363,22 +383,23 @@ The timers have no DIR/RCR, no CCMR/CCER (so no real compare-*output* channel �
 draws what PWM would do), no input capture, no per-channel interrupts. The NVIC has no
 `ISPR`/`IABR`/`ICPR` grids, no tail-chaining or late-arrival, no priority grouping. The
 CPU card lacks BASEPRI, PRIMASK save/restore discipline, LDREX/STREX and DSB/DMB.
-Structurally, **the lab has no notion of cost**: `PF_ISR_MS` is a fixed 400 ms, ticks are
-100 ms of nothing, and nothing accumulates — so the lab cannot answer the questions the
-app's own interview prep asks (how long can a handler be? what latency did that masking
-cost? does this fit the deadline?). Tooling gaps: no single-step + register-diff debugger
+**Cost and the deadline are now modelled** — `PF_ISR_MS`, `pfIsrDeadline()` and the on-period
+gate let the lab answer "how long can a handler be? does this rate fit the deadline?" (see the
+lab description above). What it still cannot answer is **latency**: how long a masked interrupt
+*waited*, or what a tail-chain or late arrival cost, because nothing accumulates a wait time
+yet. Tooling gaps: no single-step + register-diff debugger
 loop, no graded debug bench of *unlabelled* broken drivers (presets announce themselves —
 "Bug: forgot GPIOA clock" gives the game away), no one instrument correlating pin edges,
 ISR lanes and DMA bursts, and no register reference with reset values and honest reserved
 bits (the new "not wired in this model" hover is a start, not the reference).
 
 **Build order, highest leverage first:** (1) a real time base + handler-cost + deadline
-model, so "cost" becomes gradeable; (2) SysTick, then EXTI + debounce; (3) a real PWM
+model — **done (I15)**, so "cost" is gradeable; (2) **latency and jitter** — the accumulating
+half the deadline model does not have yet — then SysTick and EXTI + debounce; (3) a real PWM
 output channel (CCMR/CCER + AF pin ownership, feeding the existing waveform); (4) the
-register-semantics accuracy pass — **done in this pass (P15–P17)**; (5) DMA → ADC →
-low-power wake; (6) faults + vector table, then the debugger loop and the unlabelled-bug
-bench. Items (1)–(3) are the ones that change what the lab can *grade*; (5)–(6) are new
-teaching surface.
+register-semantics accuracy pass — **done earlier (P15–P17)**; (5) DMA → ADC → low-power wake;
+(6) faults + vector table, then the debugger loop and the unlabelled-bug bench. Items (1)–(3)
+are the ones that change what the lab can *grade*; (5)–(6) are new teaching surface.
 
 **A10 · C tools depth** — *(S–M)*. Add union/bit-field layout, integer-promotion traps,
 `const`/`volatile` placement, and packing attributes to the existing typed models; each is a

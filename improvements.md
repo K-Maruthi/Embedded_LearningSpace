@@ -2,9 +2,11 @@
 
 Companion to `problems.md`. That file lists *defects*; this one listed the *changes worth
 making*, ordered by value per unit of risk. This pass worked through them top-down:
-**I1–I11 are all done,** and two later passes added **I12** (the Protocol Lab expansion)
-and **I13** (the peripherals register-semantics pass). Nothing already completed in
-`todo.md` is repeated — see [Cross-check](#cross-check-with-todomd).
+**I1–I11 are all done,** and four later passes added **I12** (the Protocol Lab expansion),
+**I13** (the peripherals register-semantics pass), **I14** (the linker lab's reader's guide
+to `startup.s`) and **I15** (the peripherals time base, handler cost and deadline grading).
+Nothing already completed in `todo.md` is repeated — see
+[Cross-check](#cross-check-with-todomd).
 
 The theme that survived contact: the project's shell was well guarded, and **the lab
 models — the code that decides what the app teaches — were not guarded at all**. So the
@@ -15,7 +17,7 @@ found the wrong-answer bug in `problems.md` P1.
 **In order:** I1 lab-model specs · I2 graded-question contract · I3 version single-sourcing ·
 I4 accessibility part 2 · I5 notice banner · I6 highlighter · I7 seeded shuffle · I8 drift
 guards · I9 public-API lint · I10 repo/doc hygiene · I11 behaviour grading · I12 protocol
-expansion · I13 register-semantics pass.
+expansion · I13 register-semantics pass · I14 reading a `.s` · I15 deadline grading.
 
 ---
 
@@ -24,10 +26,12 @@ expansion · I13 register-semantics pass.
 **Was:** the specs covered the shell (markdown safety, backup, notes, dashboard, rail,
 journals) and **nothing** covered the models the labs teach with.
 
-**Now:** nine new zero-dependency specs, all slicing their subject out of the fragment and
+**Now:** a dozen new zero-dependency specs, all slicing their subject out of the fragment and
 running it over stubs, exactly like the existing ones (the first five below landed with I1;
 `periph_tape.spec.js` arrived with I11, `lab_compile.spec.js` with the bench legibility
-pass, `protocol_stages.spec.js` with I12 and `periph_regs.spec.js` with I13):
+pass, `protocol_stages.spec.js` with I12 and `periph_regs.spec.js` with I13; then
+`periph_deadline.spec.js` with I15, and `read_asm.spec.js` + `startup_pseudocode.spec.js`
+with I14):
 
 | spec | what it pins |
 |---|---|
@@ -40,8 +44,11 @@ pass, `protocol_stages.spec.js` with I12 and `periph_regs.spec.js` with I13):
 | `lab_compile.spec.js` | the Compilation Path bench/teaching report split, provenance labels, the real-output parsers (`#define` count, assembly labels, objdump sizes, size table, vector words), failure landing, and the rail ↔ `CLAB_TITLES` ↔ Rust stage-id agreement |
 | `protocol_stages.spec.js` | every Protocol Lab stage rendered headlessly: full length, its own goal card, no `undefined`/`NaN` in the output, per-family nav, every map link resolving, every goal callable on a fresh lab, and the drawn I²C address/data bytes (added with I12) |
 | `periph_regs.spec.js` | the peripherals register semantics — ISER write-1-to-set / ICER write-1-to-clear (write-only, reads 0), BSRR's atomic halves, the PUPDR whole-field cycle, CCR as a register, every stage rendered headlessly with the same no-`undefined` guard, every goal callable, and wiring guards against the old toggle semantics (added with I13) |
+| `read_asm.spec.js` | the `startup.s` line classifier and histogram, the four decoded instruction lines, the Thumb-2 copy, that every one of the 58 lines answers a click, and the stage's graded keys against the file (added with I14) |
+| `startup_pseudocode.spec.js` | that the reset pseudocode and the real `startup.s` walk the same steps, line for line (added with I14) |
+| `periph_deadline.spec.js` | the remainder-carrying time base (the counter matches `pfUpdateRateHz` at every PSC/ARR), the handler-cost/deadline maths, the four claims behind `pfTapeStillRunning()`, the stage-7 demo's servable periods and the narrowed stage-9 band (added with I15) |
 
-Suite total: 15 files (774 checks). Nothing to install; `npm test` runs them all.
+Suite total: 19 files (1143 checks). Nothing to install; `npm test` runs them all.
 
 > Payoff: `linker_sandbox.spec.js` failed on its first run against a real defect
 > (`problems.md` P8) — the loader clamped section sizes but not the stack/heap reserves.
@@ -323,12 +330,90 @@ reach 11 (2) · reset click emitting the BS macro (1) · "reserved in this model
 
 ---
 
+## I14 · 🔵 The linker lab showed `startup.s` but never taught reading it — **DONE** *(2026-09-30, linker-reader pass)*
+
+**Was:** stage 5 of the Linker & Startup lab shows `startup.s` as 58 annotated lines, but
+nothing anywhere explained what a reader is looking at. Line 6 (`.thumb`) had been asserting
+Thumb-2 since the first commit with no lesson behind it, and the reset walk's pseudocode
+taught a `bl SystemInit` that **no file in the project defines** — a learner who typed the
+lesson into the real bench got `undefined reference to SystemInit` from the linker
+(`problems.md` P18).
+
+**Now:** a **9th stage** in the lab, *Reading a `.s`: what is actually an instruction*:
+
+- **The histogram is the lesson.** "19 of 58 lines are instructions" is computed at load from
+  the embedded `startup.s` by `asmClassify()`, so directives, labels, comments and blank
+  lines are counted as what they are — and the vector table's `.word` directives are called
+  out as data that *does* emit bytes, not code to execute.
+- **Anatomy, not vocabulary.** Four real lines of the same file are taken apart field by
+  field (label · mnemonic · operands · the encoded form).
+- **Thumb-2**, the part the curriculum never covered: why 16-bit Thumb had to drop
+  instructions, what Thumb-2 adds back, and what that costs a reader (line 29 is 4 bytes,
+  line 28 is 2).
+- The reset pseudocode in stage 5 was corrected, so the lesson and the file the lab hands
+  the learner are the same program.
+
+**The guards.** [specs/read_asm.spec.js](specs/read_asm.spec.js) (**144 checks**) re-derives
+the classification independently, checks every decode against the line it names and every
+field token against that line's text, and pins the Thumb-2 pointers to real lines — so
+reordering `asmClassify`, moving a decode's line number, or editing `startup.s` underneath
+the prose fails the suite.
+[specs/startup_pseudocode.spec.js](specs/startup_pseudocode.spec.js) (**70 checks**) is the
+drift guard that catches the `SystemInit` class of bug: the pseudocode, the "what the linker
+supplied" panel and `startup.s` must name the same symbols and call exactly the same targets.
+
+---
+
+## I15 · 🟠 Grade the deadline, not just the cadence — **DONE** *(2026-10-01, peripherals time-base pass)*
+
+**Was:** the stage-9 behaviour gate asked only "are the gaps regular?" — and a saturated ISR
+produces beautifully regular gaps, spaced at the *cost* rather than at the requested rate.
+Configure 4 Hz against the 400 ms handler and the tape read a steady 400 ms median while
+`main()` never ran. Three separate lies shared one cause (`problems.md` P19–P22): the time
+base rounded away the remainder above PSC 99 so the counter disagreed with the Hz on the
+card; the handler cost was quoted as a hardware fact; and regularity was graded where
+punctuality was meant. Stage 7's own one-click demo armed TIM3 at a rate that starved TIM2,
+so the stage's goal was unreachable from its own button.
+
+**Now:**
+
+- **A true time base.** `pfAdvanceTimer` carries the fractional remainder in `T.acc`, so
+  `pfUpdateRateHz()` is exact at every PSC/ARR instead of only the divisors that divide a
+  tick evenly. `PF_MAX_ROLLS` bounds one tick's rollovers and `T.merged` counts the surplus
+  past UIF's single bit.
+- **A deadline.** `pfIsrDeadline(T)` returns `{periodMs, costMs, load, met}` — the period the
+  timer generates against the time one handler holds the CPU. The timer row shows it live,
+  green or red (`.dl-ok` / `.dl-bad`).
+- **Four claims, one gate.** `pfTapeStillRunning()` now requires steady **and** fresh **and**
+  on-period **and** deadline met, and `pfTapeVerdict()` names which claim broke. Regular but
+  late fails.
+- **Honest prose.** `PF_ISR_MS` is labelled a model device (a real ISR is microseconds;
+  400 ms is four sim frames, chosen so preemption is visible at the 10 Hz tick), and every
+  card that quotes it says "in this model".
+- **Stage 7 retuned.** The nesting demo runs TIM2 at 2 Hz and TIM3 at 1.25 Hz (800 ms), both
+  longer than the handler, so TIM2 is actually dispatched and the stage's `nestCount >= 1`
+  goal is reachable; the 5 Hz case stays as the counter-example the card offers.
+- **Stage 9 band narrowed** from 1.5–2.6 Hz to **1.5–2.4 Hz**: 2.6 Hz is 385 ms, shorter than
+  the 400 ms handler, so the old band accepted a rate this model can never deliver.
+
+**The guard.** [specs/periph_deadline.spec.js](specs/periph_deadline.spec.js) (**129 checks**)
+drives the real model through `pfTick()`, pins pure predicates over scripted tapes, and adds
+drift guards so the prose, the card and the checklist cannot be edited back into a different
+story than the grader. **37 negative controls** were run against a scratch copy of the source
+and all 37 were caught; the harness points the spec at the temp copy through `PERIPH_SRC`
+rather than mutating learner-facing source in place (the one in-place run left a mutation in
+a comment).
+
+---
+
 ## Cross-check with `todo.md`
 
 - **Already done there, not repeated:** §1–§8, §10–§18, §20–§22, §24–§26.
 - **Carried forward from there and now finished:** §19's second half (→ I4) and §23's API
   note (→ I9).
-- **New in this pass:** I1–I12 executed (I12 landed in the protocol pass on 2026-09-30).
+- **New in this pass:** I1–I15 executed (I12 landed in the protocol pass on 2026-09-30, I13
+  in the register-semantics pass the same day, I14 in the linker-reader pass, I15 in the
+  peripherals time-base pass).
 - **Ordering that was used:** I2 + the quiz half of I1 first (highest risk, cheapest), then
   the model specs (I1) which immediately found P8, then the isolated fixes (I3, I8, P7) and
   the UX/correctness pair (I5, I6, I7), then the accessibility work (I4), then API/lint
@@ -337,8 +422,8 @@ reach 11 (2) · reset click emitting the BS macro (1) · "reserved in this model
 ## Verification
 
 All green after every change, and each guard was checked with a negative control rather
-than assumed: `npm test` (**15** spec files, 774 checks after I13), `npm run lint`,
-`npm run build:roadmap` (validation OK, **1158 / 1500 KB** budget),
+than assumed: `npm test` (**19** spec files, **1143** checks after I15), `npm run lint`,
+`npm run build:roadmap` (validation OK, **1215 / 1500 KB** budget),
 `node scripts/sync-version.js --check` (in sync at 1.0.0), `cargo test` (10 passed,
 1 ignored) and `cargo clippy --all-targets -- -D warnings` (clean). The exact commands and
 the live-DOM checks are listed at the end of `problems.md`.

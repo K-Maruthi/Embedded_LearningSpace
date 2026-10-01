@@ -157,15 +157,15 @@ Executed with the audit recorded in `problems.md` P15–P17 and `improvements.md
 - Full gap analysis (missing peripherals, depth gaps, the cost/time-base hole, build
   order) catalogued in `features.md` under *Peripherals depth*.
 
-## Verification (latest run, 2026-09-30 · post-I13)
+## Verification (latest run, 2026-10-01 · post-I15)
 
 - `npm run build:roadmap` — validation OK (per-fragment + assembled-IIFE syntax),
-  `src/index.html` + `src/fonts/` refreshed; 1158/1500 KB single-file budget; no CDN
+  `src/index.html` + `src/fonts/` refreshed; 1215/1500 KB single-file budget; no CDN
   reference in the built HTML.
-- `npm test` — all green, 15 spec files (backup_roundtrip, dash_progress, helpers,
+- `npm test` — all green, 19 spec files (backup_roundtrip, boot_ipc, dash_progress, helpers,
   journal_nav, lab_compile, lab_quiz, linker_sandbox, markdown_safety, note_editor,
-  periph_model, periph_regs, periph_tape, protocol_model, protocol_stages, rail_nav);
-  774 checks.
+  periph_deadline, periph_model, periph_regs, periph_tape, protocol_model, protocol_stages,
+  rail_nav, read_asm, startup_pseudocode); 1143 checks.
 - `npm run lint` — clean (duplicate declarations in both IIFE scopes, duplicate
   public-API keys, console/TODO/tabs).
 - `node scripts/sync-version.js --check` — in sync at 1.0.0.
@@ -177,9 +177,10 @@ Executed with the audit recorded in `problems.md` P15–P17 and `improvements.md
 
 ## Third pass — audit, fixes and hardening
 
-The audit in `problems.md` / `improvements.md` was then executed. Everything from
-`problems.md` (P1–P10) is fixed and everything from `improvements.md` (I1–I11) is done,
-including the last one — behaviour grading — which landed after this page was first written:
+The audit in `problems.md` / `improvements.md` was then executed. `problems.md` P1–P22 are
+fixed and `improvements.md` I1–I15 are done — the first pass through I11 (behaviour grading)
+landed shortly after this page was first written, and later passes added I12–I15 (the protocol
+expansion, the register-semantics pass, the linker-reader guide and deadline grading):
 
 - **Graded questions carry their answer key in data** (`data-ok`), so a wrong green
   tick is impossible; guarded by `specs/lab_quiz.spec.js` and by `validate_build.js`.
@@ -213,8 +214,16 @@ including the last one — behaviour grading — which landed after this page wa
   `specs/periph_tape.spec.js` grades the grader. Its side find: a verified goal's
   confirmation was written into a node the re-render then discarded, so success looked
   like a dead button — `problems.md` P10, fixed in both graded labs.
+- **I14 · reading a `.s`** — the Linker & Startup lab gained a ninth stage that teaches
+  reading the assembly the build hands you, and the reset pseudocode was corrected to
+  describe the same program as `startup.s` (`problems.md` P18); guarded by
+  `specs/read_asm.spec.js` and `specs/startup_pseudocode.spec.js`.
+- **I15 · deadline grading** — the stage-9 gate now requires the cadence to match the
+  configured rate and the handler's cost to fit the period, not just a steady, fresh tape
+  (`problems.md` P19–P22); the time base carries its remainder and the timer row shows the
+  deadline live. Guarded by `specs/periph_deadline.spec.js`.
 - **CI hardening** — `cargo clippy --all-targets -- -D warnings` replaces the softer
-  `cargo check`; `validate_build.js` added an HTML size budget (1500 KB, measured ~1094 KB).
+  `cargo check`; `validate_build.js` added an HTML size budget (1500 KB, measured ~1215 KB).
 
 Still genuinely absent, as content rather than audit work: an **ADC/DMA/RTOS view**, a
 **second I²C slave**, and **CAN error frames / bus-off recovery** — now catalogued with the
