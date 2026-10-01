@@ -3,7 +3,16 @@
   var PF_TICK_MS = 100;        /* real ms between sim ticks (10 Hz) */
   var PF_CLK_PER_TICK = 100;   /* timer-clock counts that elapse per tick — 1 kHz scaled */
   var PF_LOG_MAX = 80;
-  var PF_ISR_MS = 400;         /* a handler stays on the CPU for this long — makes preemption observable */
+  /* How long the CPU spends inside one handler. This is NOT a hardware figure —
+     a real ISR that clears a flag and toggles an ODR bit costs a couple of
+     microseconds. 400 ms is four whole sim frames, chosen so that preemption is
+     *visible* at this lab's 10 Hz tick. It is deliberately longer than the
+     period of several rates the curriculum asks for, which is what lets
+     pfIsrDeadline() report a missed deadline instead of implying the ISR is
+     free. Prose that quotes it must say "in this model" — it is a visibility
+     device, not a cost you would ever measure. */
+  var PF_ISR_MS = 400;
+  var PF_MAX_ROLLS = 100;      /* rollovers one tick can hold — PF_CLK_PER_TICK, the worst case at PSC 0 */
   var PF_TIM2_IRQ_BIT = 28;    /* Cortex-M4 STM32F4 TIM2 global IRQ position in ISER0 */
   var PF_TIM3_IRQ_BIT = 29;    /* TIM3 sits right next to TIM2 in ISER0 */
   /* The only two NVIC lines this model owns. ISER/ICER writes are masked to them,
@@ -39,8 +48,8 @@
       running: true, simMs: 0, preset: null, stepIdx: 0, stage: 1,
       rcc:   { AHB1ENR: 0, APB1ENR: 0 },        /* APB1: bit0 TIM2, bit1 TIM3 */
       gpioa: { MODER: 0, OTYPER: 0, PUPDR: 0, IDR: 0, ODR: 0 },
-      tim2:  { CR1: 0, DIER: 0, SR: 0, PSC: 0, ARR: 999, CNT: 0, CCR: 500 },
-      tim3:  { CR1: 0, DIER: 0, SR: 0, PSC: 0, ARR: 999, CNT: 0, CCR: 500 },
+      tim2:  { CR1: 0, DIER: 0, SR: 0, PSC: 0, ARR: 999, CNT: 0, CCR: 500, acc: 0, merged: 0 },
+      tim3:  { CR1: 0, DIER: 0, SR: 0, PSC: 0, ARR: 999, CNT: 0, CCR: 500, acc: 0, merged: 0 },
       nvic:  { ISER0: 0, IP: { "28": 2, "29": 1 } },  /* lower number = higher priority */
       cpu:   { PRIMASK: 0, stack: [] },                /* stack: [{n, prio, ms}] — nesting depth */
       race:  { active: false, useBsrr: false, lat: null, lost: 0, toggles: 0 },
@@ -367,19 +376,34 @@
       else { break; }
     }
   }
-  /* advance one timer's counter; sets the update flag on rollover */
+  /* advance one timer's counter; sets the update flag on rollover.
+     The counter gains PF_CLK_PER_TICK/(PSC+1) counts per tick, which is a
+     fraction for any PSC above 99 and for most PSC below it. Rounding that to a
+     whole count (the old Math.max(1, Math.round(...))) meant the counter ran at
+     a rate the timer card did not show: a 250-count divisor came out 100x slow,
+     so the Hz printed next to PSC, the Hz the goal grades, and the Hz the
+     hardware actually delivered disagreed by a factor the learner had just
+     typed. The remainder is carried in T.acc, so pfUpdateRateHz() is true for
+     every PSC/ARR pair instead of only the ones that divide the tick evenly. */
   function pfAdvanceTimer(name) {
     var spec = PF_IRQS[name], T = periph[spec.key];
     if (!pfClkOn(name) || (T.CR1 & 0x01) === 0) { return; }
     var div = T.PSC + 1;
-    var inc = Math.max(1, Math.round(PF_CLK_PER_TICK / div));
-    T.CNT += inc;
-    var guard = 0;
-    while (T.CNT > T.ARR && guard++ < 5) {
-      T.CNT -= (T.ARR + 1);
-      T.SR = (T.SR | 0x01) >>> 0;
+    T.acc = (T.acc || 0) + PF_CLK_PER_TICK / div;
+    var inc = Math.floor(T.acc);
+    T.acc -= inc;
+    if (inc > 0) {
+      /* How many periods elapsed this tick. UIF is a single bit, so one or
+         twenty rollovers raise it exactly once — but the surplus is counted,
+         because "the peripheral generated more events than the CPU could take"
+         is the whole point of the deadline check below. */
+      var period = T.ARR + 1, rolls = 0;
+      T.CNT += inc;
+      while (T.CNT > T.ARR && rolls < PF_MAX_ROLLS) { T.CNT -= period; rolls++; }
+      if (T.CNT > T.ARR) { T.CNT = 0; }
+      if (rolls > 0) { T.SR = (T.SR | 0x01) >>> 0; }
+      if (rolls > 1) { T.merged = (T.merged || 0) + rolls - 1; }
     }
-    if (T.CNT > T.ARR) { T.CNT = 0; }
   }
   /* stage 8: main() toggles PA5 through a deliberate two-phase RMW window —
      read ODR on one tick, write the stale value back on the next. Any ISR
@@ -407,6 +431,30 @@
   }
   function pfUpdateRateHz(T) {
     return 1000 / ((T.PSC + 1) * (T.ARR + 1));
+  }
+  /* ---- the deadline: period vs cost ----
+     pfTapeCadence() asks "are the gaps regular?". A handler that overruns its
+     own period still produces beautifully even gaps — they are evenly spaced at
+     the *cost*, not at the rate the timer asked for. So regularity alone passes
+     a saturated ISR: configure 4 Hz, let the 400 ms handler miss its 250 ms
+     deadline, and the tape reads median 400 ms, steady, "gate met", while the
+     card still says 4.00 Hz. The learner is told they built a 4 Hz blink; the
+     CPU spent every millisecond in the ISR and main() never ran.
+     A deadline is the period the timer generates against the time one handler
+     holds the CPU. load >= 1 means the handler cannot finish before its own next
+     interrupt: it re-enters the instant it exits, everything below its priority
+     starves, and the cadence you measure is the cost, not the request. */
+  function pfIsrDeadline(T) {
+    var periodMs = 1000 / pfUpdateRateHz(T);
+    return { periodMs: periodMs, costMs: PF_ISR_MS, load: PF_ISR_MS / periodMs, met: PF_ISR_MS <= periodMs };
+  }
+  /* ...and the cadence is judged against the rate that was requested, not just
+     against itself. Regular but wrong is still wrong. The slack is one sim
+     frame wide, because a period shorter than a tick cannot be resolved at
+     all — that limit is the model's, and the sim clock is what it is. */
+  function pfTapeOnPeriod(c, periodMs) {
+    if (!(periodMs > 0) || !c.gaps) { return false; }
+    return Math.abs(c.median - periodMs) <= Math.max(periodMs * PF_TAPE_TOL, PF_TICK_MS);
   }
 
   /* ---- behaviour grading: predicates over a timestamped event tape ----
@@ -478,18 +526,30 @@
     var hits = pfTapeEntries(tape, "enter", name);
     return hits.length ? now - hits[hits.length - 1].t : null;
   }
-  function pfTapeVerdict(c, age) {
+  function pfTapeVerdict(c, age, dl) {
     if (!c.n) { return "no handler entries yet"; }
     if (c.n < PF_GOAL9_MIN_ENTRIES) { return "too few entries (" + c.n + "/" + PF_GOAL9_MIN_ENTRIES + ")"; }
     if (!c.gaps) { return "one entry — need a cadence"; }
     if (!c.steady) { return "irregular gaps (" + c.min + "–" + c.max + " ms)"; }
     if (age !== undefined && age !== null && age > PF_TAPE_STALE_MS) { return "stopped — last entry " + age + " ms ago"; }
+    if (dl && !dl.met) {
+      return "missed deadline — handler holds the CPU " + dl.costMs + " ms of a " +
+             Math.round(dl.periodMs) + " ms period (" + Math.round(dl.load * 100) + " % load), so the cadence is the cost, not the rate";
+    }
+    if (dl && !pfTapeOnPeriod(c, dl.periodMs)) {
+      return "cadence " + c.median + " ms, not the " + Math.round(dl.periodMs) + " ms you asked for";
+    }
     return "steady cadence — behaviour gate met";
   }
   /* The stage-9 behaviour gate. The goal card, the grading checklist and the tape card
-     all ask through here, so none of them can disagree about what "working" means. */
+     all ask through here, so none of them can disagree about what "working" means.
+     Three claims, not one: it is running (fresh), it is regular (steady), and it runs
+     at the rate that was configured (on-period, deadline met). */
   function pfTapeStillRunning() {
-    return pfTapeSteady(periph.tape, "TIM2", PF_GOAL9_MIN_ENTRIES, periph.simMs, PF_TAPE_STALE_MS);
+    var c = pfTapeCadence(periph.tape, "TIM2");
+    var dl = pfIsrDeadline(periph.tim2);
+    return pfTapeSteady(periph.tape, "TIM2", PF_GOAL9_MIN_ENTRIES, periph.simMs, PF_TAPE_STALE_MS) &&
+           dl.met && pfTapeOnPeriod(c, dl.periodMs);
   }
 
   var PF_PRESETS = [
@@ -631,8 +691,8 @@
       pfReg('ARR',  a(0x2C), 'RW',  T.ARR,  16, lk + '-arr', null, tim) +
       pfReg('CCR',  a(0x34), 'RW',  T.CCR,  16, lk + '-ccr', null, tim) +
       pfReg('CNT',  a(0x24), 'RO',  T.CNT,  16, lk + '-cnt', null, tim) +
-      '<div class="pf-rate">update rate ≈ <b id="pf-' + lk + '-rate">0</b> Hz · <span id="pf-' + lk + '-run">stopped</span></div>' +
-      '<p class="pf-hint"><b>CR1 bit 0 = CEN</b> start · <b>DIER bit 0 = UIE</b> ask for an IRQ on update · <b>SR bit 0 = UIF</b> write-1-to-clear · <b>CCR</b> is stage 5\'s compare value (the duty slider writes this same register). In this model the timer clock is 1 kHz, so rate = <code>1000 / (PSC+1) / (ARR+1)</code>.</p></section>';
+      '<div class="pf-rate">update rate ≈ <b id="pf-' + lk + '-rate">0</b> Hz · <span id="pf-' + lk + '-run">stopped</span> · <span id="pf-' + lk + '-dl"></span></div>' +
+      '<p class="pf-hint"><b>CR1 bit 0 = CEN</b> start · <b>DIER bit 0 = UIE</b> ask for an IRQ on update · <b>SR bit 0 = UIF</b> write-1-to-clear · <b>CCR</b> is stage 5\'s compare value (the duty slider writes this same register). In this model the timer clock is 1 kHz, so rate = <code>1000 / (PSC+1) / (ARR+1)</code> — and that is the rate the counter really counts at, for every PSC, including the ones whose step is a fraction of a tick. <b>The deadline is separate:</b> in this model a handler holds the CPU ' + PF_ISR_MS + ' ms, so a period below that cannot be met no matter how correct the registers are.</p></section>';
   }
   /* PUPDR is a register you mostly meet through the pin card — two bits per pin.
      Clicking either bit of a pin cycles that pin's whole field (single-bit toggles
@@ -728,9 +788,12 @@
   function pfTapeStatHtml() {
     var c = pfTapeCadence(periph.tape, "TIM2");
     var age = pfTapeAge(periph.tape, "TIM2", periph.simMs);
+    var dl = pfIsrDeadline(periph.tim2);
     return 'TIM2 handler entries <b>' + c.n + '</b> · median gap <b>' + (c.median ? c.median + ' ms' : '—') +
-      '</b> over the newest <b>' + c.window + '</b> · last entry <b>' + (age === null ? '—' : age + ' ms ago') + '</b> · <b class="' +
-      (pfTapeStillRunning() ? 'tr-ok' : 'tr-open') + '">' + esc(pfTapeVerdict(c, age)) + '</b>';
+      '</b> over the newest <b>' + c.window + '</b> · last entry <b>' + (age === null ? '—' : age + ' ms ago') + '</b> · ' +
+      'asked for <b>' + Math.round(dl.periodMs) + ' ms</b>, handler costs <b>' + dl.costMs + ' ms</b> (' +
+      '<b>' + Math.round(dl.load * 100) + ' %</b> load) · <b class="' +
+      (pfTapeStillRunning() ? 'tr-ok' : 'tr-open') + '">' + esc(pfTapeVerdict(c, age, dl)) + '</b>';
   }
   function pfTapeRowsHtml() {
     var out = periph.tape.slice(-12).map(function (e) {
@@ -742,14 +805,14 @@
     return '<section class="pf-card"><h3>Behaviour tape<span class="pf-sub">what the grader watches over time</span></h3>' +
       '<div class="pf-tapestat" id="pf-tapestat">' + pfTapeStatHtml() + '</div>' +
       '<div class="pf-log pf-tape" id="pf-tape">' + pfTapeRowsHtml() + '</div>' +
-      '<p class="pf-hint">A register snapshot says what is true <b>now</b>; this says what the CPU <b>did</b>. Every handler entry, exit, ISR-driven pin write and lost update lands here with its sim-clock stamp. Stage 9 is graded on ' + PF_GOAL9_MIN_ENTRIES + ' entries on a steady cadence <em>and</em> on the newest one being recent — the cadence is judged over the last ' + PF_TAPE_WINDOW + ' entries, so an old hiccup ages out and a handler that has stopped is visible immediately.</p></section>';
+      '<p class="pf-hint">A register snapshot says what is true <b>now</b>; this says what the CPU <b>did</b>. Every handler entry, exit, ISR-driven pin write and lost update lands here with its sim-clock stamp. Stage 9 is graded on three separate claims: ' + PF_GOAL9_MIN_ENTRIES + ' entries on a steady cadence, the newest one being recent, <em>and</em> the cadence matching the rate you configured. The last one is the deadline — in this model a handler holds the CPU for ' + PF_ISR_MS + ' ms (chosen so preemption is visible at this lab\'s ' + (1000 / PF_TICK_MS) + ' Hz tick; a real ISR is microseconds), so any rate faster than ' + (1000 / PF_ISR_MS).toFixed(1) + ' Hz cannot be met and everything below that priority starves. A regular cadence is not a kept deadline: regular-but-late still fails. The cadence is judged over the last ' + PF_TAPE_WINDOW + ' entries, so an old hiccup ages out and a handler that has stopped is visible immediately.</p></section>';
   }
   /* stage 7: swim-lane timeline over the per-tick CPU context history —
      shows at a glance who owns the CPU and when a handler was preempted. */
   function pfTimelineCard() {
     return '<section class="pf-card"><h3>Interrupt timeline<span class="pf-sub">who owns the CPU, last ~15 s</span></h3>' +
       '<div class="pf-tl" id="pf-tl"><svg viewBox="0 0 300 96" preserveAspectRatio="none"></svg></div>' +
-      '<p class="pf-hint">One lane per context, time flows left → right. The <b>main</b> lane owns the CPU whenever no handler is running; a handler lane lights while it executes, and a <em>notch</em> in the main lane is stolen time. A preemption looks like a shorter bar starting on top of a longer one — the lower-priority handler resumes when the upper bar ends.</p></section>';
+      '<p class="pf-hint">One lane per context, time flows left → right. The <b>main</b> lane owns the CPU whenever no handler is running; a handler lane lights while it executes, and a <em>notch</em> in the main lane is stolen time. A preemption looks like a shorter bar starting on top of a longer one — the lower-priority handler resumes when the upper bar ends. Bars are about ' + PF_ISR_MS + ' ms long because that is how long this model gives a handler; the width of the main lane\'s gaps is the deadline in the same units.</p></section>';
   }
   /* stage 3: the solder behind the symbol — pin cell for PA5, live from
      MODER / OTYPER / PUPDR / ODR (plus the pad via IDR when PA5 is an input). */
@@ -840,7 +903,14 @@
          } },
     5: { text: 'Retune TIM2 so its update rate lands between <b>0.5 Hz and 2 Hz</b> and keep it running (clock on, CEN set). Use only PSC and ARR.',
          ok: function () { var T = periph.tim2; return pfClkOn("TIM2") && (T.CR1 & 1) !== 0 && pfUpdateRateHz(T) >= 0.5 && pfUpdateRateHz(T) <= 2; },
-         hint: function () { var r = pfUpdateRateHz(periph.tim2); return 'Current rate: ' + r.toFixed(2) + ' Hz = 1000 / ((PSC+1)·(ARR+1)). Pick factors of ~500–2000 that land in 0.5–2 Hz — e.g. PSC 9, ARR 99.'; } },
+         hint: function () {
+           var T = periph.tim2, r = pfUpdateRateHz(T);
+           var s = 'Current rate: ' + r.toFixed(2) + ' Hz = 1000 / ((PSC+1)·(ARR+1)). Pick factors that land in 0.5–2 Hz — e.g. PSC 9, ARR 99. ';
+           if (r > 0 && r < 1000 / PF_ISR_MS) {
+             s += 'Note this period (' + Math.round(1000 / r) + ' ms) is shorter than the ' + PF_ISR_MS + ' ms this model gives a handler, so nothing can meet that deadline — the registers can be right and the cadence still wrong.';
+           }
+           return s;
+         } },
     6: { text: 'Fire the TIM2 handler <b>once</b>. Every gate has to agree: clock, CEN, DIER, ISER0 bit 28, PRIMASK = 0. You do not need PSC/ARR tuned — 1 kHz defaulting fires fast enough.',
          ok: function () { return (periph.fired.TIM2 | 0) >= 1 && periph.cpu.PRIMASK === 0; },
          hint: function () {
@@ -853,19 +923,37 @@
          } },
     7: { text: 'Cause <b>one preemption</b>: two timers firing, both unmasked, and the pending IRQ must be <em>more urgent</em> — a lower IPR number — than the running handler. One click arms a working demo; changing the two IPR numbers is the real lesson.',
          ok: function () { return periph.nestCount >= 1; },
-         hint: function () { return periph.cpu.PRIMASK ? 'PRIMASK is set — nothing dispatches. Clear it.' : 'Preemption needs a lower-priority handler already on the CPU when a more urgent request lands. If TIM3 is the one running, make TIM3 the <em>less</em> urgent (bigger IPR number).'; } },
+         hint: function () {
+           if (periph.cpu.PRIMASK) { return 'PRIMASK is set — nothing dispatches. Clear it.'; }
+           var t2 = pfIsrDeadline(periph.tim2), t3 = pfIsrDeadline(periph.tim3);
+           if (!t3.met) {
+             return 'TIM3 is configured for ' + Math.round(t3.periodMs) + ' ms but a handler holds the CPU ' + t3.costMs +
+                    ' ms here, so TIM3 never leaves the CPU and TIM2 is never dispatched — that is starvation, not preemption. Slow TIM3 below ' +
+                    (1000 / t3.costMs).toFixed(2) + ' Hz.';
+           }
+           if (!t2.met) { return 'TIM2 overruns its own ' + Math.round(t2.periodMs) + ' ms period — it re-enters before it exits, so nothing else ever runs.'; }
+           return 'Preemption needs a lower-priority handler already on the CPU when a more urgent request lands. If TIM3 is the one running, make TIM3 the <em>less</em> urgent (bigger IPR number).';
+         } },
     8: { text: 'Break something on purpose: run the racy main loop until the log shows a <b>lost update</b> (≥ 1), then flip main() to <b>BSRR</b> and watch the lost counter stop moving while the LED keeps blinking.',
          ok: function () { return periph.race.lost >= 1 && periph.race.useBsrr === true; },
          hint: function () { return periph.race.lost < 1 ? 'Nothing lost yet — arm the ISR, run the racy main loop, and give it a second or two.' : 'You have seen the damage — now switch main() to BSRR and confirm the counter freezes.'; } },
-    9: { text: 'Cold start, no net: make PA5★ blink from the TIM2 interrupt at <b>1.5 – 2.6 Hz</b>. Clocks, pin mode, CEN, DIER, ISER0[28], PRIMASK = 0 — all of it, from a power-on reset. Then prove it <em>keeps</em> running: the behaviour tape must show ' + PF_GOAL9_MIN_ENTRIES + ' handler entries on a steady cadence, not one lucky snapshot.',
+    9: { text: 'Cold start, no net: make PA5★ blink from the TIM2 interrupt at <b>1.5 – 2.4 Hz</b>. Clocks, pin mode, CEN, DIER, ISER0[28], PRIMASK = 0 — all of it, from a power-on reset. Then prove it <em>keeps</em> running: the behaviour tape must show ' + PF_GOAL9_MIN_ENTRIES + ' handler entries on a steady cadence <em>at the rate you configured</em>, not one lucky snapshot. A cadence can be perfectly regular and still be the wrong one — that is what missing the deadline looks like.',
          ok: function () {
            var T = periph.tim2, r = pfUpdateRateHz(T);
            return pfClkOn("GPIOA") && pfModer(5) === 1 && pfClkOn("TIM2") && (T.CR1 & 1) !== 0 &&
-                  r >= 1.5 && r <= 2.6 && (T.DIER & 1) !== 0 &&
+                  r >= 1.5 && r <= 2.4 && (T.DIER & 1) !== 0 &&
                   ((periph.nvic.ISER0 >>> PF_TIM2_IRQ_BIT) & 1) !== 0 &&
                   periph.cpu.PRIMASK === 0 && pfTapeStillRunning();
          },
-         hint: function () { return 'The checklist on the left shows exactly which gate is still shut; the behaviour tape shows whether the handler ran on a cadence once the gates opened.'; } }
+         hint: function () {
+           var dl = pfIsrDeadline(periph.tim2);
+           if (!dl.met) {
+             return 'Deadline missed: the handler holds the CPU ' + dl.costMs + ' ms of a ' + Math.round(dl.periodMs) +
+                    ' ms period (' + Math.round(dl.load * 100) + ' % load). Either slow the timer below ' +
+                    (1000 / PF_ISR_MS).toFixed(1) + ' Hz, or remember a real ISR is microseconds — 400 ms is this model standing in for it.';
+           }
+           return 'The checklist on the left shows exactly which gate is still shut; the behaviour tape shows whether the handler ran on the configured cadence once the gates opened.';
+         } }
   };
   function pfGoalCard(n) {
     var g = PF_GOALS[n];
@@ -881,17 +969,21 @@
     { l: 'PA5 is an output (MODER[11:10] = 01)',    f: function () { return pfModer(5) === 1; } },
     { l: 'TIM2 clocked (APB1ENR[0])',               f: function () { return pfClkOn("TIM2"); } },
     { l: 'TIM2 running (CR1.CEN)',                  f: function () { return (periph.tim2.CR1 & 1) !== 0; } },
-    { l: 'update rate in 1.5 – 2.6 Hz',             f: function () { var r = pfUpdateRateHz(periph.tim2); return r >= 1.5 && r <= 2.6; } },
+    /* The band tops out at 2.4 Hz on purpose: a 400 ms handler cannot service a
+   417 ms period... it can, but only just, and 2.6 Hz (385 ms) is below the cost
+   outright — the goal must not accept a rate this model can never deliver. */
+    { l: 'update rate in 1.5 – 2.4 Hz',             f: function () { var r = pfUpdateRateHz(periph.tim2); return r >= 1.5 && r <= 2.4; } },
     { l: 'TIM2 requests an IRQ (DIER.UIE)',         f: function () { return (periph.tim2.DIER & 1) !== 0; } },
     { l: 'NVIC line open (ISER0[28])',              f: function () { return ((periph.nvic.ISER0 >>> PF_TIM2_IRQ_BIT) & 1) !== 0; } },
     { l: 'PRIMASK = 0',                             f: function () { return periph.cpu.PRIMASK === 0; } },
-    { l: PF_GOAL9_MIN_ENTRIES + ' handler entries on a steady cadence', f: function () { return pfTapeStillRunning(); } }
+    { l: PF_GOAL9_MIN_ENTRIES + ' handler entries on a steady cadence', f: function () { return pfTapeStillRunning(); } },
+    { l: 'deadline kept: ' + PF_ISR_MS + ' ms handler inside the ' + Math.round(1000 / pfUpdateRateHz(periph.tim2)) + ' ms period', f: function () { return pfIsrDeadline(periph.tim2).met; } }
   ];
   function pfChecklistCard() {
     var rows = PF_CH9.map(function (c, i) {
       return '<li id="pf-ch9-' + i + '"><span class="bx">·</span>' + esc(c.l) + '</li>';
     }).join('');
-    return '<section class="pf-card"><h3>Grading checklist<span class="pf-sub">live — verify when all nine are green</span></h3><ul class="pf-check" id="pf-ch9">' + rows + '</ul></section>';
+    return '<section class="pf-card"><h3>Grading checklist<span class="pf-sub">live — verify when every one is green</span></h3><ul class="pf-check" id="pf-ch9">' + rows + '</ul></section>';
   }
 
   /* ---- stage-specific control rigs ---- */
@@ -903,8 +995,8 @@
   }
   function pfNestCtlCard() {
     return '<section class="pf-card"><h3>Nesting demo<span class="pf-sub">one button, then read the log</span></h3>' +
-      '<div class="pf-goalarow"><button type="button" class="btn" id="pf-nest-arm">⚡ Arm: TIM2 @ 2 Hz (prio 2) + TIM3 @ 5 Hz (prio 1)</button></div>' +
-      '<p class="pf-hint">The arm button writes real values: both clocks, PA5+PA6 as outputs, TIM2 PSC 9 / ARR 49, TIM3 PSC 9 / ARR 19, both DIER, ISER0 bits 28+29, PRIMASK clear. The TIM2 handler holds the CPU ≈ 400 ms; TIM3 knocks every 200 ms <em>during</em> it, with a lower IPR number — so you should see enter → ⚡ preempt → exit → resume → exit.</p></section>';
+      '<div class="pf-goalarow"><button type="button" class="btn" id="pf-nest-arm">⚡ Arm: TIM2 @ 2 Hz (prio 2) + TIM3 @ 1.25 Hz (prio 1)</button></div>' +
+      '<p class="pf-hint">The arm button writes real values: both clocks, PA5+PA6 as outputs, TIM2 PSC 9 / ARR 49, TIM3 PSC 9 / ARR 79, both DIER, ISER0 bits 28+29, PRIMASK clear. In this model a handler holds the CPU ≈ ' + PF_ISR_MS + ' ms (a real ISR is microseconds — the ' + PF_ISR_MS + ' ms is here so preemption is visible at ' + (1000 / PF_TICK_MS) + ' Hz). TIM2 fires every ' + Math.round(1000 / pfUpdateRateHz({ PSC: 9, ARR: 49 })) + ' ms, so it is still on the CPU when TIM3 lands ' + Math.round(1000 / pfUpdateRateHz({ PSC: 9, ARR: 79 })) + ' ms later with a <em>lower</em> IPR number — you should see enter → ⚡ preempt → exit → resume → exit. Both periods are longer than ' + PF_ISR_MS + ' ms, so neither handler misses its deadline; try TIM3 PSC 9 / ARR 19 (5 Hz, 200 ms) instead and watch preemption stop entirely, because a handler that overruns its own period starves everything below it.</p></section>';
   }
   function pfRaceCtlCard() {
     return '<section class="pf-card"><h3>Race rig<span class="pf-sub">main() vs the ISR, same ODR</span></h3>' +
@@ -1073,7 +1165,7 @@
       case 9: return pfCols(
           pfTeach('Bring-up, blind',
             '<p>Power-on reset is pressed for you (stage bar → Playground aside: hit <b>⏻ Power-on reset</b> to be sure). You get the full bank and one sentence of spec:</p>' +
-            '<p class="pf-spec">PA5 must blink under the TIM2 update interrupt at 1.5 – 2.6 Hz. Nothing else. No step buttons, no hints until you verify.</p>' +
+            '<p class="pf-spec">PA5 must blink under the TIM2 update interrupt at 1.5 – 2.4 Hz. Nothing else. No step buttons, no hints until you verify.</p>' +
             '<p>Every wrong or missing write is visible somewhere — dropped-write log lines, the gate table, the checklist on the right. That is exactly what a logic analyser and a debugger are on real silicon.</p>') +
           pfRccCard() + pfGpioaCard() + pfTimCard('TIM2'),
           pfNvicCard() + pfCpuCard() + pfWaveCard('TIM2'),
@@ -1201,6 +1293,13 @@
       if (rate) { rate.textContent = pfUpdateRateHz(T).toFixed(2); }
       var run = document.getElementById('pf-' + lk + '-run');
       if (run) { run.textContent = !pfClkOn(name) ? 'no clock' : ((T.CR1 & 1) ? 'running (CEN)' : 'stopped (CEN=0)'); }
+      var dlEl = document.getElementById('pf-' + lk + '-dl');
+      if (dlEl) {
+        var dl = pfIsrDeadline(T);
+        dlEl.textContent = 'period ' + Math.round(dl.periodMs) + ' ms vs ' + dl.costMs + ' ms handler — ' +
+          (dl.met ? Math.round(dl.load * 100) + ' % CPU' : 'deadline missed, ' + Math.round(dl.load * 100) + ' % CPU');
+        dlEl.className = dl.met ? 'dl-ok' : 'dl-bad';
+      }
     });
     /* NVIC live gate table */
     var tb = document.getElementById('pf-irqtbl-body');
@@ -1366,14 +1465,18 @@
     pfWriteReg('RCC', 'AHB1ENR', periph.rcc.AHB1ENR | 0x1);
     pfWriteReg('RCC', 'APB1ENR', periph.rcc.APB1ENR | 0x3);
     pfSetModerOut(5); pfSetModerOut(6);
-    pfWriteReg('TIM2', 'PSC', 9);  pfWriteReg('TIM2', 'ARR', 49);   /* 2 Hz updates */
+    /* Both periods must outlast PF_ISR_MS, or the higher-priority timer saturates
+       the CPU and the lower one is never dispatched at all — at 5 Hz (200 ms)
+       against a 400 ms handler this button produced zero TIM2 entries, so stage
+       7's own goal (nestCount >= 1) was unreachable from its own demo. */
+    pfWriteReg('TIM2', 'PSC', 9);  pfWriteReg('TIM2', 'ARR', 49);   /* 2 Hz — 500 ms period */
     pfWriteReg('TIM2', 'DIER', periph.tim2.DIER | 1);
     pfWriteReg('TIM2', 'CR1', periph.tim2.CR1 | 1);
-    pfWriteReg('TIM3', 'PSC', 9);  pfWriteReg('TIM3', 'ARR', 19);   /* 5 Hz updates */
+    pfWriteReg('TIM3', 'PSC', 9);  pfWriteReg('TIM3', 'ARR', 79);   /* 1.25 Hz — 800 ms period */
     pfWriteReg('TIM3', 'DIER', periph.tim3.DIER | 1);
     pfWriteReg('TIM3', 'CR1', periph.tim3.CR1 | 1);
     pfWriteReg('NVIC', 'ISER0', periph.nvic.ISER0 | (1 << PF_TIM2_IRQ_BIT) | (1 << PF_TIM3_IRQ_BIT));
-    pfLog('ok', 'Nesting demo armed — TIM2 (prio 2) holds the CPU ~400 ms; TIM3 (prio 1) knocks every 200 ms.');
+    pfLog('ok', 'Nesting demo armed — in this model each handler holds the CPU ~' + PF_ISR_MS + ' ms. TIM2 (prio 2) fires every 500 ms and is still running when TIM3 (prio 1) lands 800 ms in, so you get one preemption. Keep both periods above ' + PF_ISR_MS + ' ms and it stays observable.');
     pfSave(); pfRenderLive();
   }
   function pfArmRaceIsr() {

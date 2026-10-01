@@ -1119,6 +1119,12 @@ table.pr-bit tr.dim td{opacity:.45}
 .pf-tapestat b{color:var(--ink);font-weight:600}
 .pf-tapestat b.tr-ok{color:var(--ok)}
 .pf-tapestat b.tr-open{color:var(--warn)}
+/* The timer row's deadline readout. pfTimCard sets dl-ok / dl-bad on this span, and
+   without rules here both states render identically - the one distinction the whole
+   fix exists to add would be invisible. This palette has no --bad token; --warn is
+   the colour already used for errors (.pf-tapestat b.tr-open). */
+.dl-ok{color:var(--ok)}
+.dl-bad{color:var(--warn);font-weight:600}
 .pf-tape{max-height:150px}
 .pf-mm{font-family:var(--mono);font-size:11px}
 .pf-mmrow{display:grid;grid-template-columns:92px 130px 1fr auto;gap:10px;align-items:baseline;padding:6px 4px;border-bottom:1px dotted var(--rule-soft)}

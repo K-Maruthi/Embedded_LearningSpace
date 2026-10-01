@@ -77,12 +77,24 @@ if (hint5) {
 
 const nest = /TIM2 PSC (\d+) \/ ARR (\d+), TIM3 PSC (\d+) \/ ARR (\d+)/.exec(src);
 check("the nesting demo states both timers' PSC/ARR", !!nest, String(nest && nest[0]));
+/* The demo has to satisfy two things at once, and they used to fight: the
+   higher-priority timer must land while the lower-priority one is still on the
+   CPU (that is what a preemption is), AND it must not arrive faster than a
+   handler can finish (that is what a deadline is). It was 5 Hz against a
+   400 ms handler, so TIM3 overran its own 200 ms period, never left the CPU,
+   and TIM2 was dispatched zero times — stage 7's goal (nestCount >= 1) was
+   unreachable from stage 7's own one-click demo. Assert the deadline, not a
+   magic rate: any pair that outlives PF_ISR_MS is a legitimate demo. */
+const isrMs = Number((/PF_ISR_MS\s*=\s*(\d+)/.exec(src) || [])[1]);
 if (nest) {
   const t2 = rate(Number(nest[1]), Number(nest[2]));
   const t3 = rate(Number(nest[3]), Number(nest[4]));
+  const p2 = 1000 / t2, p3 = 1000 / t3;
   check("the nesting demo's TIM2 is 2 Hz as its label says", t2 === 2, String(t2));
-  check("the nesting demo's TIM3 is 5 Hz as its label says", t3 === 5, String(t3));
-  check('the more urgent timer also fires faster', t3 > t2, t2 + ' vs ' + t3);
+  check('the more urgent timer is the slower one, so it can be overtaken',
+    t3 < t2, t2 + ' Hz vs ' + t3 + ' Hz');
+  check('both nesting-demo periods outlast the handler, so neither overruns',
+    p2 > isrMs && p3 > isrMs, p2.toFixed(0) + ' ms / ' + p3.toFixed(0) + ' ms vs ' + isrMs + ' ms');
 }
 
 /* ---- 5. the arm routines write the same values the hints promise ----
@@ -113,12 +125,13 @@ if (armT3 && nest) {
     JSON.stringify(armT3) + ' vs PSC ' + nest[3] + ' / ARR ' + nest[4]);
 }
 if (armT2) {
-  check('the rates the arm routine writes really are 2 Hz and 5 Hz',
+  check('the TIM2 the arm routine writes is 2 Hz',
     rate(armT2.psc, armT2.arr) === 2, String(rate(armT2.psc, armT2.arr)));
 }
 if (armT3) {
-  check('the TIM3 the arm routine writes really is 5 Hz',
-    rate(armT3.psc, armT3.arr) === 5, String(rate(armT3.psc, armT3.arr)));
+  const t3 = rate(armT3.psc, armT3.arr);
+  check('the TIM3 the arm routine writes keeps its deadline',
+    1000 / t3 > isrMs, (1000 / t3).toFixed(0) + ' ms period vs a ' + isrMs + ' ms handler');
 }
 const raceArm = src.slice(src.indexOf('function pfArmRaceIsr'), src.indexOf('function pfGoStage'));
 const raceT2 = armValues(raceArm, 'TIM2');
