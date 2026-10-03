@@ -2402,6 +2402,32 @@
       if (b.dataset.sv) { setSubview(b.dataset.sv); }
     });
   });
+  Array.prototype.forEach.call(document.querySelectorAll("[data-hero-view]"), function (b) {
+    b.addEventListener("click", function () {
+      if (b.dataset.heroView === "protocols") { setView("protocols"); }
+    });
+  });
+  var signalModel = document.getElementById("signal-model");
+  var signalToggle = document.getElementById("signal-toggle");
+  if (signalModel && signalToggle) {
+    signalToggle.addEventListener("click", function () {
+      var high = signalModel.dataset.level !== "high";
+      signalModel.dataset.level = high ? "high" : "low";
+      signalToggle.setAttribute("aria-pressed", String(high));
+      signalToggle.textContent = high ? "Release button" : "Press button";
+      document.getElementById("signal-status").textContent = high
+        ? "HIGH · IDR[0] = 1 · LED on" : "LOW · IDR[0] = 0 · LED off";
+      document.getElementById("signal-voltage").textContent = high ? "3.3 V" : "0 V";
+      document.getElementById("signal-idr").textContent = "bit 0  =  " + (high ? "1" : "0");
+      document.getElementById("signal-output").textContent = high ? "HIGH" : "LOW";
+      document.getElementById("signal-explanation").textContent = high
+        ? "Pressed switch connects PA0 to 3.3 V. IDR bit 0 reads 1, so the C decision sets ODR bit 5 and lights the LED."
+        : "Open switch: the pull-down holds PA0 at 0 V. The C decision reads IDR bit 0 and leaves ODR bit 5 clear.";
+      signalModel.classList.remove("is-changing");
+      requestAnimationFrame(function () { signalModel.classList.add("is-changing"); });
+      window.setTimeout(function () { signalModel.classList.remove("is-changing"); }, 720);
+    });
+  }
 
   loadAll();
   initDataTools();

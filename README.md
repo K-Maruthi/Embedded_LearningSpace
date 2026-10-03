@@ -197,6 +197,7 @@ src-tauri/          Rust backend + Tauri config (window, capabilities, bundling,
 roadmap-source/     the real source: HTML/JS fragments, build.js, validate_build.js
 scripts/            lint.js and sync-version.js, zero-dependency like the specs
 specs/              dependency-free behaviour specs, run with npm test
+.claude/skills/     project-local agent skills (UI/UX + design-system decision support)
 ```
 
 Start with [architecture.md](architecture.md) if you want to know **how the files
@@ -208,6 +209,19 @@ Project history and planning live in [features.md](features.md) (what ships and 
 next), [problems.md](problems.md) (the defect audit), [improvements.md](improvements.md)
 (the executed improvements), [todo.md](todo.md) (the original checklist) and
 [ongoing.md](ongoing.md) (the latest session handoff).
+
+## Agent skills
+
+[`.claude/skills/`](.claude/skills/README.md) holds seven **project-local** agent skills
+(~1.1 MB, committed, nothing global) that help with UI/UX and design decisions instead of
+guessing them per session. They are decision support only — nothing there runs at build time or
+is part of `npm test`.
+
+Start with **`roadmap-design-system`**, which encodes this app's actual token set, the
+212px-rail breakpoint arithmetic, the constraints `validate_build.js` and `lint.js` enforce, the
+naming prefixes, and the verification loop. `ui-ux-pro-max` adds a searchable catalog (styles,
+palettes, type pairings, 119 UX/accessibility rules, motion, charts) via a pure-stdlib Python
+search tool; it is installed trimmed, with the removals recorded in its own `TRIMMED.md`.
 
 ## Constraints worth knowing
 

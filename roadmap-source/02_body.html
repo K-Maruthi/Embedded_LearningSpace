@@ -4,29 +4,62 @@
 <div id="content" tabindex="-1">
 <div class="view" id="view-roadmap">
 <section class="hero"><div class="wrap hero-grid">
+  <div class="lede">
+    <h2>See one signal move through the machine.</h2>
+    <p>Press the button. Follow its voltage to a GPIO pin, into the input register, through a C decision, and out to an LED.</p>
+    <p>This is a <strong>Cortex-M4 teaching model</strong> using 3.3 V logic and STM32-style registers. The roadmap then builds each idea from bits to real-time systems.</p>
+    <div class="hero-actions">
+      <button class="btn hero-primary" type="button" data-hero-view="protocols">Open Signals 101</button>
+      <a class="btn" href="#stages">Browse <span id="tcount">0</span> topics</a>
+    </div>
+    <div class="lenses" id="lenslegend"></div>
+    <p class="lens-note" id="lensnote">Choose a lens to follow that view across the roadmap.</p>
+  </div>
+  <section class="signal-model" id="signal-model" data-level="low" aria-labelledby="signal-model-title">
+    <header class="signal-model-head">
+      <div><h3 id="signal-model-title">Button input, register read, LED output</h3><span>Interactive circuit model · 3.3 V</span></div>
+      <output id="signal-status" aria-live="polite">LOW · PA0 = 0 · LED off</output>
+    </header>
+    <div class="signal-art">
+      <svg viewBox="0 0 840 330" role="img" aria-labelledby="signal-svg-title signal-svg-desc">
+        <title id="signal-svg-title">A button signal passing through a microcontroller</title>
+        <desc id="signal-svg-desc">A pull-down resistor holds input PA0 low while the button is open. Pressing the button connects 3.3 volts to PA0. The program reads GPIOA input data register and sets an LED output through a current-limiting resistor.</desc>
+        <g class="sig-labels"><text x="28" y="34">INPUT CIRCUIT</text><text x="320" y="34">MICROCONTROLLER</text><text x="682" y="34">OUTPUT CIRCUIT</text></g>
+        <g class="sig-wire"><path class="sig-input-wire" d="M45 91H112M198 91H276V124H326"/><path d="M276 124V191"/><path class="sig-output-wire" d="M514 215H642"/><path d="M712 215H760V262"/></g>
+        <g class="sig-ground"><path d="M276 234v10m-16 0h32m-26 7h20m-14 7h8M748 262v10m-16 0h32m-26 7h20m-14 7h8"/></g>
+        <g class="sig-supply"><circle cx="45" cy="91" r="4"/><text x="28" y="76">3.3 V</text></g>
+        <g class="sig-switch"><path d="M112 91h15m54 0h17"/><path class="sig-lever-open" d="M127 91l34-24"/><path class="sig-lever-closed" d="M127 91h54"/><circle cx="127" cy="91" r="3"/><circle cx="181" cy="91" r="3"/><text x="126" y="50">BUTTON</text></g>
+        <g class="sig-resistor"><path d="M276 191v8l-7 5 14 8-14 8 14 8-7 5v5"/><text x="150" y="216">10 kΩ pull-down</text></g>
+        <g class="sig-pin"><circle cx="276" cy="124" r="6"/><text x="218" y="151">PA0 · input</text></g>
+        <rect class="sig-mcu" x="326" y="62" width="188" height="183" rx="4"/>
+        <text class="sig-mcu-name" x="346" y="89">CORTEX-M4 MODEL</text>
+        <rect class="sig-register" x="345" y="104" width="150" height="47" rx="2"/><text class="sig-small" x="356" y="121">GPIOA_IDR</text><text class="sig-bit" id="signal-idr" x="357" y="141">bit 0  =  0</text>
+        <path class="sig-flow" d="M420 153v18"/><text class="sig-small" x="356" y="189">C reads input</text><text class="sig-code" x="356" y="207">if (IDR &amp; PA0)</text>
+        <rect class="sig-register" x="345" y="217" width="150" height="20" rx="2"/><text class="sig-small" x="356" y="231">GPIOB_ODR · bit 5</text>
+        <g class="sig-out-resistor"><path d="M642 215h8l5-7 8 14 8-14 8 14 7-7"/><text x="646" y="190">330 Ω</text></g>
+        <g class="sig-led"><path d="M686 201l25 14-25 14z"/><path d="M711 200v30"/><path d="M697 195l-7-9m20 7 1-12"/><text x="685" y="250">LED</text></g>
+        <g class="sig-readout"><text id="signal-voltage" x="208" y="177">0 V</text><text id="signal-output" x="610" y="245">LOW</text></g>
+        <path class="sig-pulse sig-pulse-input" d="M45 91H112M198 91H276V124H326"/>
+        <path class="sig-pulse sig-pulse-output" d="M514 215H642"/>
+      </svg>
+    </div>
+    <div class="signal-model-foot">
+      <button class="btn" type="button" id="signal-toggle" aria-pressed="false" aria-describedby="signal-explanation">Press button</button>
+      <p id="signal-explanation">Open switch: the pull-down holds PA0 at 0 V. The C decision reads IDR bit 0 and leaves ODR bit 5 clear.</p>
+      <code>GPIOA-&gt;IDR &amp; (1u &lt;&lt; 0)</code>
+    </div>
+    <p class="signal-text-alt">The input and output are separate circuits. The pull-down sets a known input level; firmware reads it and controls the LED output.</p>
+  </section>
+</div></section>
+
+<section class="hero-memory wrap" aria-labelledby="memory-map-title">
+  <div><h3 id="memory-map-title">Then follow the data into memory</h3><p>Each region opens the roadmap topics that explain what lives there.</p></div>
   <div class="mmap" aria-label="Typical microcontroller memory map">
     <div class="mmap-head"><span>address</span><span>region</span></div>
     <div id="mmap-body"></div>
-    <div class="mmap-foot">Pick a region to see every topic that lives there.</div>
+    <div class="mmap-foot">Choose a region to find its related topics.</div>
   </div>
-  <div class="lede">
-    <h2>Learn C the way the machine runs it</h2>
-    <p><span id="tcount">0</span> topics, ordered from what a bit is to how an ECU survives a
-       missed deadline. Nothing here is explained only as syntax. Every topic is taken
-       apart through the same questions: what the idea is, what the
-       <strong>compiler</strong> does with it, what the <strong>linker</strong> does with it,
-       where it <strong>sits in memory</strong>, what happens at <strong>run time</strong>,
-       what the <strong>CPU and the hardware</strong> actually see, and how it
-       <strong>bites you</strong> on real silicon.</p>
-    <p>Work top to bottom, or pick one lens and read it across every topic —
-       reading "in memory" end to end is a different education from reading "at compile time"
-       end to end. Take notes on any topic, bookmark what you want to come back to, and watch
-       the mosaic fill in.</p>
-    <div class="lenses" id="lenslegend"></div>
-    <p class="lens-note" id="lensnote">All lenses shown. Select one to read a single
-       lens across the whole roadmap; select it again to go back.</p>
-  </div>
-</div></section>
+</section>
 
 <nav class="stagenav"><div class="wrap in" id="stagenav"></div></nav>
 <main class="wrap" id="stages"></main>

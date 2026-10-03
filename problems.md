@@ -4,26 +4,38 @@ A pass over `roadmap-source/` (fragments, build + validation, lint), the Rust ba
 `specs/`, and repo hygiene, run **after** the audit recorded in `todo.md`. Everything
 here is cross-checked against `todo.md` — see [Cross-check](#cross-check-with-todomd) —
 so nothing already fixed there is repeated, and each of its completed items was verified
-against the code rather than trusted.
-
-Status: **all twenty-two are fixed.** Two of them (P8, P9) were found *by the new specs and
+against the code rather than trusted.Status: **P1–P22 are fixed; P23–P30 are open.** Two of them (P8, P9) were found *by the new specs and
 lint rules written during this pass*, which is the point of the pass; P10 was found by
 tracing the new I11 grading path end to end in the live app; P11 was found by the
-compilation-path spec written for the bench legibility pass; P12 and P14 were found by
-the stage-render spec written for the protocol pass (P13 by driving a scrub backwards in the
+compilation-path spec written for the bench legibility pass; P12 and P14 were found by the
+stage-render spec written for the protocol pass (P13 by driving a scrub backwards in the
 live app); **P15–P17 were found by a register-semantics audit of the peripherals lab**,
 then caught (and one more, the pin-cell `undefined`, re-caught) by the spec written for the
 fix — see [improvements.md](improvements.md) I13; **P18 was found by the startup-pseudocode
-drift guard** written for the linker-reader pass (I14); and **P19–P22 were found by a
+drift guard** written for the linker-reader pass (I14); **P19–P22 were found by a
 time-base audit of the peripherals lab** — the clamped counter step, the handler cost quoted
-as fact, the saturated-ISR gate and the unreachable stage-7 demo — fixed in I15.
+as fact, the saturated-ISR gate and the unreachable stage-7 demo — fixed in I15; and
+**P23–P30 were found by a UI/UX + accessibility audit** of all nine views against the
+119-rule `ui-ux-pro-max` catalog — see [That audit](#the-uiux--accessibility-audit) for the
+method, the coverage, and the two candidate findings that were **discarded as false
+positives**. They are open, not fixed: none of them has a spec yet.
 
 **In order:** P1 wrong quiz keys · P2 version drift · P3 highlighter · P4 shuffles ·
 P5 `window.alert` · P6 duplicate API key · P7 doc/model drift · P8 negative reserve ·
 P9 duplicate `esc()` · P10 swallowed goal confirmation · P11 `#define` pluralisation ·
 P12 I²C address byte drawn off by one · P13 unreachable "back to live" ·
 P14 a bare `undefined` in the protocol map · P15 NVIC set/clear semantics wrong ·
-P16 PUPDR unreachable · P17 BSRR/CCR taught but not in the register bank.
+P16 PUPDR unreachable · P17 BSRR/CCR taught but not in the register bank ·
+P18 undefined `SystemInit` in the reset pseudocode · P19 timer rate the card did not print ·
+P20 handler cost stated as hardware fact · P21 a saturated ISR passing the gate ·
+P22 stage 7's demo unable to reach stage 7's goal.
+
+**Open — from the UI/UX + accessibility audit:**
+P23 `--ink-3` fails AA on every surface in both themes · P24 labels not associated, 8 controls
+unlabelled · P25 reduced motion does not stop JS-driven animation · P26 focus ring removed with
+no replacement · P27 7.5px bit labels · P28 sticky elements with no `scroll-padding` ·
+P29 wrong answers signalled by colour alone · P30 326 tab stops in the roadmap.
+
 The forward-looking companion is [features.md](features.md).
 
 Baseline before this pass (all green — so every item below was something the guards did
@@ -520,6 +532,250 @@ card as the counter-example: a handler that overruns its period starves everythi
 
 ---
 
+## P23 · 🔴 `--ink-3` fails WCAG AA on every surface, in both themes — **OPEN**
+
+**Where:** [01_head.html:17](roadmap-source/01_head.html#L17), [:52](roadmap-source/01_head.html#L52),
+[:61](roadmap-source/01_head.html#L61) (the token itself); ~4,500 call sites
+
+**Rule:** `[Accessibility] Color Contrast` (High) — "Minimum 4.5:1 ratio for normal text".
+Measured from the computed styles, not estimated:
+
+| token pair | dark | light | needs |
+|---|---|---|---|
+| `--ink-3` on `--surface-2` | **3.41:1** | **3.11:1** | 4.5 |
+| `--ink-3` on `--surface` | **3.81:1** | **3.32:1** | 4.5 |
+| `--ink-3` on `--bg` | **4.24:1** | **2.98:1** | 4.5 |
+| `--ink-3` on `--bg-2` | **4.48:1** | **2.76:1** | 4.5 |
+| `--accent` on `--bg` | 6.9:1 ok | **4.40:1** | 4.5 |
+| `--accent` on `--bg-2` | 6.2:1 ok | **4.08:1** | 4.5 |
+
+**Found by:** the UI/UX + accessibility audit. Every contrast failure in the entire app is this
+one token — walking all nine views and every lab stage found **4,504** failing text nodes and
+**not one** of a different colour: protocols 2,778 · periph 1,297 · roadmap 356 · practice 32 ·
+dash 31 · playground 6 · compile 2 · graph 2 · mosaic 0. Affected classes include `.k`,
+`code`, `.kick`, `.addr`, `.sub`, `.bl`, `.lbl`, `.stn`, `.pf-sub`, `.nn`, `.tag`, `.lb`,
+`.rev`, `.rname`, `.crumb-lab`, `.notes-empty`, `.topic-visual-head`, `.tv-caption`,
+`.pf-openet`, `.pf-stage-tag`, `.glabel`, `.labcap`, `.blank`.
+
+This is the app's *tertiary* ink — the colour for captions, addresses, bit-field annotations and
+muted labels — so it is exactly the text a learner squints at. Dark fails every surface; light is
+worse, because the same lightness step that reads as "recessed" on `#101A24` reads as "faded" on
+`#E9EDF1`. There is **no** hardcoded hex anywhere in the failure set — this is one token value,
+which is why it is cheap to fix and impossible to fix piecemeal.
+
+**Fix.** Re-pick `--ink-3` for each theme against the *lightest* surface it lands on
+(`--surface-2`), and re-check `--accent` in light. Roughly `#8C9BAA`-ish in dark and a darker
+grey in light; then add the pair matrix to a spec so a future palette edit cannot regress it.
+
+---
+
+## P24 · 🔴 Visible labels are not programmatically associated, and 8 controls have no label — **OPEN**
+
+**Rule:** `[Forms] Form Control Labels` (Critical) — "Pair Text label with input";
+`Don't: Inputs with placeholder only`.
+
+**Where:** [24_lab_protocols.js](roadmap-source/24_lab_protocols.js) (131 instances across the
+12 protocol stages) and [02_body.html](roadmap-source/02_body.html) (11 in the practice view).
+
+Two distinct defects:
+
+1. **Label rendered but not associated** — the protocol lab writes
+   `<span class="lbl">ID (hex)</span><input id="pr-can-id" …>` with no `for`, no wrapping
+   `<label>`, and no `aria-label`. The visible text is right in front of the control, so it looks
+   labelled in a screenshot, but the accessibility tree exposes an unnamed text field.
+   Verified live: `document.querySelector('label[for="pr-can-id"]')` → `null`.
+   Affected: `pr-char`, `pr-drift`, `pr-type`, `pr-i2c-saddr`, `pr-spi-xbyte`, `pr-can-id`,
+   `pr-can-d0`, `pr-can-d1` — [24_lab_protocols.js:411](roadmap-source/24_lab_protocols.js#L411),
+   [:451](roadmap-source/24_lab_protocols.js#L451), [:479](roadmap-source/24_lab_protocols.js#L479),
+   [:491](roadmap-source/24_lab_protocols.js#L491), [:725](roadmap-source/24_lab_protocols.js#L725),
+   [:1367](roadmap-source/24_lab_protocols.js#L1367), [:1548](roadmap-source/24_lab_protocols.js#L1548),
+   [:1550](roadmap-source/24_lab_protocols.js#L1550).
+2. **No label at all** — the practice view's bit/shift/endian/registers tools put bare inputs
+   next to each other with nothing to name them: `tc-val`, `sh-val`, `sh-amt`, `en-val`, `rg-val`
+   ([02_body.html:290](roadmap-source/02_body.html#L290), [:297](roadmap-source/02_body.html#L297),
+   [:303](roadmap-source/02_body.html#L303), [:316](roadmap-source/02_body.html#L316)), the
+   self-check `<textarea class="ivans">`
+   ([20_app.js:1702](roadmap-source/20_app.js#L1702)), and `lab-src`
+   ([02_body.html:240](roadmap-source/02_body.html#L240)) which is **placeholder-only** — the
+   exact anti-pattern the rule names.
+
+By contrast the periph lab is clean: 10/10 stages, **0** unnamed controls. So this is not a
+house style — it is two views that were never audited.
+
+**Fix.** Give each `.lbl` a generated `id` and each control a matching `aria-label` (or wrap the
+pair in a `<label>`), and add visible labels to the five practice inputs.
+
+---
+
+## P25 · 🔴 `prefers-reduced-motion` only silences CSS; every lab animation is JS-driven — **OPEN**
+
+**Rule:** `[Animation] Respect Reduced Motion` (**Critical**) — "Check reduceMotionEnabled and
+simplify animations".
+
+**Where:** [01_head.html:315](roadmap-source/01_head.html#L315),
+[:1067](roadmap-source/01_head.html#L1067) (the CSS half);
+[23_lab_periph.js:1805](roadmap-source/23_lab_periph.js#L1805),
+[24_lab_protocols.js:1966](roadmap-source/24_lab_protocols.js#L1966),
+[40_graph.js:197](roadmap-source/40_graph.js#L197),
+[20_app.js:1794](roadmap-source/20_app.js#L1794) (the JS half).
+
+There are two reduced-motion blocks and they are both CSS-only: one sets
+`animation-duration`/`transition-duration` to `.001ms!important`, the other disables
+`.pf-bit.pulse`. That kills five CSS keyframe animations (`grow`, `pulseGate`, `pfb-pulse`,
+`pfp-flk`, `prflk`) — and **nothing else**.
+
+All the motion a learner actually perceives is driven by JavaScript timers:
+
+| driver | cadence |
+|---|---|
+| `setInterval(prTick, PR_TICK_MS)` | advances the protocol playhead 0.34–0.6 s per bit |
+| `setInterval(pfTick, PF_TICK_MS)` | advances the peripherals tape and LED states |
+| `requestAnimationFrame(loop)` in the graph | rotates the concept graph continuously |
+| `setInterval(ivTickTimer, 1000)` | the practice countdown |
+
+A `matchMedia('(prefers-reduced-motion: reduce)')` check appears **nowhere** in the bundle — the
+only `matchMedia` call in the entire app is for `prefers-color-scheme: dark`. So a learner who has
+asked their OS for reduced motion still gets a bit-by-bit self-advancing playhead, pulsing LEDs and
+a spinning graph; the CSS block creates the *appearance* of compliance without the substance.
+
+**Fix.** One shared `prefersReduced()` helper; when true, `prStartTicker`/`pfTicker` render the
+final state and do not start, and the graph loop does not begin. The scrubber already exists for
+the protocol lab, so the reduced path is "land on the last frame".
+
+---
+
+## P26 · 🟠 The focus ring is removed outright on two controls, with nothing replacing it — **OPEN**
+
+**Rule:** `[Interaction] Focus States` (High) — `Don't: Remove focus outline without replacement`.
+
+The app gets this right almost everywhere — a global
+`:focus-visible{outline:2px solid var(--accent)}` at [01_head.html:75](roadmap-source/01_head.html#L75),
+plus 20-odd element-specific rings. Walking all 1,548 style rules finds exactly **five** places
+that suppress an outline, and three of them are wrong:
+
+| rule | verdict |
+|---|---|
+| [01_head.html:667](roadmap-source/01_head.html#L667) `.ldscript-edit{outline:0}` | **no replacement** — no `:focus` rule exists for this class anywhere |
+| [01_head.html:1238](roadmap-source/01_head.html#L1238) `.pr-termin input:focus{outline:none}` | **no replacement** — `border-color` only, which disappears against a 1px border |
+| [01_head.html:693](roadmap-source/01_head.html#L693) `.note-starters button:focus-visible{…outline:none}` | weak replacement (accent text + border colour, no ring) |
+| `01_head.html:48` `#content:focus{outline:none}` | fine — `tabindex="-1"` skip target, never user-tabbable |
+| `01_head.html:625` `.gnode:focus-visible{outline:none}` | fine — replaced by `.core{stroke:var(--accent);stroke-width:2.6}` |
+
+`.ldscript-edit` is the Linker lab's script editor — the one control in that lab a learner types
+into for minutes at a time, and the one where losing the caret position matters most. Because
+`.ldscript-edit` (specificity 0,1,0) is authored *after* `:focus-visible` (also 0,1,0), the
+suppression wins on source order; the global ring never applies.
+
+**Fix.** Delete `outline:0` from `.ldscript-edit` and let the global ring apply; give
+`.pr-termin input:focus` and `.note-starters button:focus-visible` the same 2px accent ring.
+
+---
+
+## P27 · 🟠 Teaching text is rendered at 7.5px in the register and protocol grids — **OPEN**
+
+**Rule:** `[Typography] Base Font Size` (High) — `Don't: Render critical text below 12pt`.
+
+Measured font sizes of every rendered text node, all nine views, all 22 lab stages:
+
+- **7.5px** — `.bl`, the bit labels in the periph register grid: **544** nodes in the periph lab,
+  **736** in the protocol lab. Also 8px nodes and 9px `.lbl` wire-bit labels.
+- **8.8–10.5px** in the roadmap's inline schematics — `.topic-visual-head` ("8-bit view"),
+  `.tv-caption`, `.addr` (memory addresses), `.stage-goals-label` ("by the end of this stage"),
+  and the float-format labels (`sign` / `exponent` / `fraction`) at 9px.
+
+To be fair to the design: **body prose is not the problem.** The roadmap's prose, ledes and topic
+titles are 14px+, and the histogram shows 1,961 nodes at 14px+ against 3,559 at 11–11.9px — the
+sub-12px mass is *annotation inside the diagrams*. But that annotation is not decoration: the bit
+numbers under a register, the `sign`/`exponent`/`fraction` labels on an IEEE-754 field diagram and
+the `0x0800 0000` memory addresses **are** the content of those visuals. A learner who cannot read
+the bit labels cannot read the diagram at all.
+
+**Fix.** Raise the diagram-annotation floor to ~11px (labels may stay smaller than body copy, but
+not 7.5px), or make the register grid's bit labels zoom with the browser as body text does.
+`font-size` in `px` here is also why browser zoom cannot rescue it — see P27's note in
+`features.md`'s constraint list.
+
+---
+
+## P28 · 🟠 Three sticky elements and no `scroll-padding` — focused items can scroll under the header — **OPEN**
+
+**Rule:** `[Accessibility] Focus Not Obscured (Minimum)` (High, WCAG 2.2 SC 2.4.11) — "Offset
+sticky UI with scroll-padding"; `[Accessibility] Focus Not Obscured (Enhanced)` is also in the
+catalog's required set.
+
+**Where:** [01_head.html:82](roadmap-source/01_head.html#L82) (`header.masthead`, sticky `top:0`,
+`z-index:40`), [:145](roadmap-source/01_head.html#L145) (`.stagenav`, sticky `top:52px`,
+`z-index:30`), [:628](roadmap-source/01_head.html#L628) (`.gpanel`, sticky `top:72px`).
+
+The stylesheet contains **zero** `scroll-padding` and **zero** `scroll-margin` declarations.
+Keyboard focus scrolls the focused element into view; with a 52px masthead plus a sticky stage nav
+above it, the element being focused can land underneath both — announced by the screen reader,
+invisible on screen, with no way for the user to tell why the page "didn't move".
+
+The app is *partly* protected by luck: `.rail` is a fixed left column and the content is inset by
+`--rail: 212px`, so nothing overlaps horizontally. The exposure is vertical, and it is worst in the
+labs, where the sticky `.stagenav` sits directly above the focused stage control.
+
+**Fix.** `html{scroll-padding-top:64px}` (masthead + stage nav), and `scroll-margin-top:64px` on
+focusable lab controls.
+
+---
+
+## P29 · 🟠 A wrong graded answer is signalled by red alone — **OPEN**
+
+**Rule:** `[Accessibility] Color Only` (High) — "Use icons/text in addition to color";
+`Don't: Red/green only for error/success`.
+
+**Where:** [21_lab_compile.js:99](roadmap-source/21_lab_compile.js#L99),
+[:103](roadmap-source/21_lab_compile.js#L103);
+[22_lab_linker.js:831](roadmap-source/22_lab_linker.js#L831),
+[:833](roadmap-source/22_lab_linker.js#L833),
+[:857](roadmap-source/22_lab_linker.js#L857)
+
+Across the stylesheet `.correct` and `.wrong` are `border-color` + `color` + `background` +
+`outline` — four properties, all of them hue. No glyph, no text, no shape change. For roughly 8 %
+of men with a red-green colour vision deficiency, "right answer" and "wrong answer" differ only in
+a hue they cannot separate.
+
+The behaviour makes it worse in one place: on a **wrong** multiple-choice answer the explanation
+panel is *hidden* (`ans.hidden = !ok`), so a wrong answer produces no text at all — only red.
+Correct answers do reveal a sentence beginning "Correct. …", which is why this reads as fine in a
+normal review and is invisible in the failure case. The ordering exercises
+(`#complab-order`, `linklab-order`, the script-choice row) say nothing at all until the whole
+sequence is finished, so every intermediate correct/wrong state is colour-only.
+
+The periph lab already solves this properly and is the in-repo precedent:
+[23_lab_periph.js:1426](roadmap-source/23_lab_periph.js#L1426) writes `✓` / `✗` into the row.
+
+**Fix.** Render `✓`/`✗` (or the words) in the graded-choice handlers, and stop hiding the
+explanation on a wrong answer — show why the chosen answer was wrong.
+
+---
+
+## P30 · 🟡 The roadmap view is 326 tab stops deep — **OPEN**
+
+**Rule:** `[Interaction] Keyboard Navigation` (High) — "Keep tab order aligned with visual order
+and test every action without a pointer".
+
+Each of the 163 topic rows carries two focusable controls:
+`<span class="bm" role="checkbox" tabindex="0" title="Bookmark">★</span>` and
+`<span class="done-mark" role="checkbox" aria-checked="false" tabindex="0" title="Mark as
+learned">✓</span>` — **326** `tabindex="0"` stops in one view, all before the skip link's target
+is meaningfully reached. Roles and `aria-checked` are correct; the volume is the problem, and it is
+the single biggest keyboard cost in the app. A roving tabindex (one stop per row, arrows to move
+within the row) would collapse it to 163.
+
+**Deliberately *not* filed as a defect:** those same 326 targets are 22×22 and 20×20, below the
+WCAG 2.5.8 minimum of 24×24 — but the rule's **spacing exception** applies and the app passes it.
+Measured centre-to-centre distance is **31px** between `.bm` and `.done-mark` in a row and
+**81.2px** between adjacent bookmarks, against the 24px the exception requires. It is worth a spec
+rather than a fix: any future tightening of that row's gap would break conformance silently,
+because nothing measures it.
+
+**Fix.** Roving tabindex per topic row, plus a spec asserting the ≥24px centre distance.
+
+---
+
 ## Cross-check with `todo.md`
 
 **Verified as genuinely done in the code** (not just ticked):
@@ -549,12 +805,70 @@ card as the counter-example: a handler that overruns its period starves everythi
 also re-caught the pin-cell `undefined`, filed inside P17).
 **Found by the startup-pseudocode drift guard:** P18.
 **Found by the peripherals time-base audit:** P19, P20, P21, P22.
+**Found by the UI/UX + accessibility audit against the `ui-ux-pro-max` ruleset** (P23–P30, all
+still open): P23, P24, P25, P26, P27, P28, P29, P30.
 
 **Carried forward from `todo.md` into `improvements.md`:** §19's second half (now done) and
 §23 (now done).
 
 **What comes next** — content frontiers and engineering ideas — is catalogued in
 [features.md](features.md).
+
+---
+
+## The UI/UX + accessibility audit
+
+**Ruleset.** The 119 rules in `ux-guidelines.csv` (4 Critical, 44 High, 62 Medium, 9 Low across
+20 categories) plus the 32 in `app-interface.csv`, installed under
+[.claude/skills/ui-ux-pro-max/SKILL.md](.claude/skills/ui-ux-pro-max/SKILL.md). Findings carry the
+catalog's own severity, not an invented one. Rules that cannot apply to a desktop web app with no
+auth, no forms flow, no modals and no images (Accessible Authentication, Back Behavior, Modal
+Escape, Safe Area Insets, AI Disclaimer, Spatial UI) are marked not-applicable rather than passed.
+
+**Method.** Not a read-through. The built app was loaded in a browser and every rule that *can* be
+decided mechanically was decided against computed values — accessible names walked from
+`aria-label`/`aria-labelledby`/`<label for>`/`<label>` wrapper/`title`/text; WCAG contrast computed
+from the effective background (walking ancestors for the first non-transparent layer) with the
+large-text exemption applied at 24px / 18.66px-bold; focus-ring suppression found by walking all
+**1,548** style rules in the CSSOM; font sizes and target boxes read from `getBoundingClientRect`.
+
+**Coverage.** All nine views, and inside the labs every stage — the labs render one stage on
+demand, so a single-pass audit would have missed most of the app.
+
+| view | stages walked | unnamed controls | contrast failures | text < 10px |
+|---|---|---|---|---|
+| roadmap (163 topics) | — | 0 | 356 | 16 (min 8.8px) |
+| dash | — | 0 | 31 | 0 |
+| mosaic | — | 0 | 0 | 0 |
+| graph | — | 0 | 2 | 5 (9.5px) |
+| compile | — | 0 | 2 | 5 (9px) |
+| playground | — | 0 | 6 | 0 |
+| periph | 10/10 | 0 | 1,297 | 882 (min 7.5px) |
+| protocols | 12/12 across 5 families | 131 | 2,778 | 1,713 (min 7.5px) |
+| practice | — | 11 | 32 | 0 |
+
+**Two candidates were discarded as false positives**, which is the reason to measure rather than
+eyeball:
+
+- A pair of `#DCE6EE`-on-`#F0F0F0` "invisible text" hits in the roadmap. The elements measure
+  **0×0** and the string `#f0f0f0` appears **nowhere** in the stylesheet — a computed-style
+  artifact of collapsed content forced open during the sweep, not a theming bug. Reported as
+  nothing.
+- 326 targets below 24×24 (the `.bm` / `.done-mark` pair) looked like a hard WCAG 2.5.8 failure.
+  Measuring the centre distances showed **31px** within a row and **81.2px** between bookmarks
+  against the 24px the spacing exception requires, so the app **passes**. Recorded inside P30 as a
+  fragility worth a spec, explicitly *not* as a violation.
+
+**What passed, and is worth keeping:** a correct `viewport` meta and a skip link; a global
+2px `:focus-visible` ring with ~20 element-level rings on top; `aria-live="polite"` on seven
+regions plus the purpose-built "saved" mirror in `20_app.js`; `role="checkbox"` + `aria-checked` +
+`title` on the bookmark/learned marks; the global reduced-motion block; `lang="en"`; no colour
+information carried by hue alone in the periph lab's checklist (`✓`/`✗`); and no hardcoded hex in
+the whole contrast failure set — which is why P23 is one token rather than 4,500 edits.
+
+**Not yet guarded.** Nothing in `specs/` asserts any of this, so all eight findings can regress
+silently. The natural first step is a spec that walks the built HTML and fails on contrast below
+4.5:1, on a control with no accessible name, and on a focusable control with no computed outline.
 
 ---
 
